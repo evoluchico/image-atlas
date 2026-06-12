@@ -379,6 +379,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if immutable:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            # frontend files: never cache, so a server upgrade can't leave a
+            # stale app.js talking to a newer API
+            self.send_header("Cache-Control", "no-cache, no-store")
         self.end_headers()
         self.wfile.write(body)
 
