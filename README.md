@@ -83,11 +83,30 @@ Throughput is roughly limited by image decoding: ~400k images take
 ### 2. Serve (instant, read-only)
 
 ```bash
-python -m atlas serve /path/to/dataset [--port 8765] [--no-browser]
+python -m atlas serve /path/to/dataset [--port 8765] [--host 127.0.0.1] [--no-browser]
 ```
 
 The server recomputes nothing. If the bundle is incomplete or from an
 older format it refuses to start and tells you what to rebuild.
+
+### Remote / headless use
+
+On a headless machine (no `$DISPLAY`), `serve` skips the browser launch
+automatically. The recommended way to view a dataset served on a remote
+box is SSH port forwarding — private, no extra software:
+
+```bash
+# on your own machine
+ssh -L 8765:localhost:8765 user@remote-host
+# then open http://localhost:8765/ in your local browser
+```
+
+(Tip: in an already-open OpenSSH session, type `~C` then
+`-L 8765:localhost:8765` to add the forward without reconnecting.)
+
+Alternatively `--host 0.0.0.0` binds on all interfaces for direct LAN
+access — but the server has **no authentication**, so prefer the SSH
+tunnel for anything non-trivial.
 
 ### Filters
 

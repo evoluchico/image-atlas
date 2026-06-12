@@ -16,6 +16,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import sqlite3
 import threading
 import webbrowser
@@ -418,10 +419,22 @@ class Handler(BaseHTTPRequestHandler):
 def run(args) -> None:
     ds = Dataset(Path(args.dataset))
     handler = type("BoundHandler", (Handler,), {"ds": ds})
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
-    url = f"http://127.0.0.1:{args.port}/"
+    server = ThreadingHTTPServer((args.host, args.port), handler)
+    url = f"http://{args.host}:{args.port}/"
     print(f"Serving '{ds.manifest['name']}' ({ds.n} images) at {url}  (Ctrl-C to stop)")
-    if not args.no_browser:
+    if args.host not in ("127.0.0.1", "localhost"):
+        print(
+            "WARNING: bound to a non-loopback interface. The server has no "
+            "authentication; anyone who can reach this host can browse the dataset."
+        )
+    headless = not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if headless and not args.no_browser:
+        print(
+            f"(headless session — not opening a browser. From your own machine:\n"
+            f"   ssh -L {args.port}:localhost:{args.port} <user>@<this-host>\n"
+            f" then open http://localhost:{args.port}/ locally)"
+        )
+    elif not args.no_browser:
         threading.Timer(0.3, webbrowser.open, [url]).start()
     try:
         server.serve_forever()
@@ -433,5 +446,8 @@ def add_parser(sub) -> None:
     p = sub.add_parser("serve", help="serve a built dataset bundle locally")
     p.add_argument("dataset", help="dataset bundle directory (output of `atlas build`)")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default 127.0.0.1; use 0.0.0.0 for LAN "
+                        "access — unauthenticated, prefer ssh -L port forwarding)")
     p.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     p.set_defaults(func=run)

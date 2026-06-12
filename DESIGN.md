@@ -239,9 +239,13 @@ for step 2 only; everything else is negligible.
 
 ## 6. Runtime: backend
 
-A threaded stdlib `http.server` bound to 127.0.0.1. State loaded at
-startup: manifest, memory-mapped numpy arrays, one read-only SQLite
-connection per thread (`query_only` pragma), and a small filter cache.
+A threaded stdlib `http.server`, bound to 127.0.0.1 by default
+(`--host` can widen it; the server is unauthenticated, so remote viewing
+is expected to go through SSH port forwarding — on headless machines the
+browser launch is skipped and the `ssh -L` hint is printed instead).
+State loaded at startup: manifest, memory-mapped numpy arrays, one
+read-only SQLite connection per thread (`query_only` pragma), and a
+small filter cache.
 
 ### Filtering
 
