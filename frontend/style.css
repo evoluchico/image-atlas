@@ -61,4 +61,8 @@ button:hover { filter: brightness(1.12); }
 #detail-meta { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
 #detail-meta td { padding: 3px 6px 3px 0; vertical-align: top; word-break: break-word; }
 #detail-meta td:first-child { color: var(--muted); white-space: nowrap; }
+#contents-count { margin-bottom: 6px; }
+#contents-grid { display: block; width: 100%; cursor: pointer; border-radius: 6px; }
+#contents-more { margin-top: 8px; width: 100%; }
+
 .hidden { display: none; }

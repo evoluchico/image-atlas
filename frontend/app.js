@@ -196,7 +196,8 @@ function render() {
     const size = Math.min(markerPx * 1.55, markerPx + 7 * Math.log10(ag.count));
     const rect = drawSprite(ag.id, sx, sy, size);
     drawBadge(fmtCount(ag.count), rect.x + rect.w - 4, rect.y + 2);
-    markers.push({ ...rect, id: ag.id, count: ag.count });
+    markers.push({ ...rect, id: ag.id, count: ag.count,
+                   z: scene.z, tx: ag.tx, ty: ag.ty });
   }
   if (lasso && lasso.length > 1) {
     ctx.beginPath();
@@ -213,6 +214,7 @@ function render() {
   }
   hud.textContent =
     `z${scene.z} · ${scene.aggregates.length} aggregates · ${scene.items.length} items`;
+  renderContents();   // repaint the side-panel grid as sprite strips arrive
 }
 
 /* ----------------------------------------------------------- interaction */
@@ -249,6 +251,8 @@ window.addEventListener("mouseup", (e) => {
     const rect = canvas.getBoundingClientRect();
     const m = hitTest(e.clientX - rect.left, e.clientY - rect.top);
     pinnedId = m && m.id !== pinnedId ? m.id : null;
+    if (m && pinnedId !== null && m.count > 1) openTileContents(m);
+    else closeContents();
     updateDetail(pinnedId ?? hoverId);
     requestRender();
   }
@@ -330,6 +334,97 @@ async function updateDetail(id) {
   }
 }
 
+/* ------------------------------------------------------- tile contents grid
+ * Clicking an aggregate opens a paginated grid of every image inside that
+ * tile (current filter applied, best representatives first). Each page is
+ * one /api/tile call + one sprite strip — bounded work regardless of size.
+ */
+
+const GRID_PAGE = 60;
+const GRID_COLS = 6;
+const contentsBox = document.getElementById("contents");
+const contentsCount = document.getElementById("contents-count");
+const contentsGrid = document.getElementById("contents-grid");
+const contentsMore = document.getElementById("contents-more");
+let contents = null;   // {z, tx, ty, total, ids, selected}
+
+function closeContents() {
+  contents = null;
+  contentsBox.classList.add("hidden");
+}
+
+async function openTileContents(tile) {
+  contents = { z: tile.z, tx: tile.tx, ty: tile.ty, total: 0, ids: [], selected: null };
+  contentsBox.classList.remove("hidden");
+  await loadMoreContents();
+}
+
+async function loadMoreContents() {
+  if (!contents) return;
+  const params = new URLSearchParams({
+    z: contents.z, tx: contents.tx, ty: contents.ty,
+    token: activeToken(), offset: contents.ids.length, limit: GRID_PAGE,
+  });
+  const res = await fetch(`/api/tile?${params}`);
+  if (!res.ok || !contents) return;
+  const d = await res.json();
+  contents.total = d.total;
+  contents.ids.push(...d.ids);
+  ensureSprites(d.ids);
+  contentsCount.textContent =
+    `${contents.total.toLocaleString()} images in this region — showing ${contents.ids.length}`;
+  contentsMore.classList.toggle("hidden", contents.ids.length >= contents.total);
+  renderContents();
+}
+
+function renderContents() {
+  if (!contents) return;
+  const cellPx = 46, gap = 2;
+  const rows = Math.ceil(contents.ids.length / GRID_COLS);
+  const w = GRID_COLS * cellPx + (GRID_COLS - 1) * gap;
+  const h = Math.max(1, rows * cellPx + (rows - 1) * gap);
+  if (contentsGrid.width !== w || contentsGrid.height !== h) {
+    contentsGrid.width = w;
+    contentsGrid.height = h;
+  }
+  const g = contentsGrid.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  const cell = manifest.sprite_cell;
+  contents.ids.forEach((id, i) => {
+    const x = (i % GRID_COLS) * (cellPx + gap);
+    const y = Math.floor(i / GRID_COLS) * (cellPx + gap);
+    const entry = spriteCache.get(id);
+    if (entry && entry.img) {
+      g.drawImage(entry.img, entry.sx, entry.sy, cell, cell, x, y, cellPx, cellPx);
+    } else {
+      g.fillStyle = "#2b2f38";
+      g.fillRect(x, y, cellPx, cellPx);
+    }
+    if (id === contents.selected) {
+      g.strokeStyle = "#5b9dd9";
+      g.lineWidth = 2;
+      g.strokeRect(x + 1, y + 1, cellPx - 2, cellPx - 2);
+    }
+  });
+}
+
+contentsGrid.addEventListener("click", (e) => {
+  if (!contents) return;
+  const rect = contentsGrid.getBoundingClientRect();
+  const scale = contentsGrid.width / rect.width;
+  const x = (e.clientX - rect.left) * scale;
+  const y = (e.clientY - rect.top) * scale;
+  const i = Math.floor(y / 48) * GRID_COLS + Math.floor(x / 48);
+  const id = contents.ids[i];
+  if (id === undefined) return;
+  contents.selected = id;
+  pinnedId = id;
+  updateDetail(id);
+  renderContents();
+});
+
+contentsMore.addEventListener("click", loadMoreContents);
+
 /* ------------------------------------------------------------ size slider */
 
 const sizeSlider = document.getElementById("size-slider");
@@ -363,6 +458,7 @@ async function finishLasso() {
     });
     if (!res.ok) return;
     selection = await res.json();
+    closeContents();
     updateSelectionUI();
     scheduleFetch(true);
   } catch (e) { /* server gone */ }
@@ -370,6 +466,7 @@ async function finishLasso() {
 
 function clearSelection() {
   selection = null;
+  closeContents();
   updateSelectionUI();
   scheduleFetch(true);
 }
@@ -410,6 +507,7 @@ async function applyFilter() {
     }
     filterToken = data.token;
     selection = null;            // a new filter supersedes any lasso
+    closeContents();
     updateSelectionUI();
     filterStatus.textContent =
       `${data.count.toLocaleString()} / ${manifest.count.toLocaleString()} match`;

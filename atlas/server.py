@@ -292,6 +292,23 @@ class Dataset:
                 )
         return {"z": z, "aggregates": aggregates, "items": items}
 
+    def tile_members(self, z: int, tx: int, ty: int, token: str,
+                     offset: int, limit: int) -> dict:
+        """Filtered members of one tile, best representatives first."""
+        mask = self.get_mask(token)
+        z = max(self.zmin, min(self.zmax, z))
+        order, keys, starts, _ = self.tiles[z]
+        side = 1 << z
+        key = ty * side + tx
+        i = int(np.searchsorted(keys, key))
+        if i >= len(keys) or keys[i] != key:
+            return {"total": 0, "ids": []}
+        members = order[starts[i] : starts[i + 1]]
+        surv = members[mask[members]] if mask is not None else np.asarray(members)
+        ranked = surv[np.argsort(-np.asarray(self.rep[surv]), kind="stable")]
+        page = ranked[offset : offset + limit]
+        return {"total": int(len(surv)), "ids": [int(s) for s in page]}
+
     # ------------------------------------------------------------ sprites
 
     def sprite_strip(self, ids: list[int]) -> bytes:
@@ -417,6 +434,22 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(410, "unknown filter token; re-apply the filter")
                 except (ValueError, IndexError):
                     return self._error(400, "bad viewport parameters")
+                return self._json(result)
+            if route == "/api/tile":
+                q = parse_qs(url.query)
+                try:
+                    result = self.ds.tile_members(
+                        int(q["z"][0]), int(q["tx"][0]), int(q["ty"][0]),
+                        q.get("token", [ALL_TOKEN])[0],
+                        max(0, int(q.get("offset", ["0"])[0])),
+                        min(500, max(1, int(q.get("limit", ["60"])[0]))),
+                    )
+                except KeyError as e:
+                    if str(e).strip("'") in ("z", "tx", "ty"):
+                        return self._error(400, "need z, tx, ty")
+                    return self._error(410, "unknown filter token; re-apply the filter")
+                except (ValueError, IndexError):
+                    return self._error(400, "bad tile parameters")
                 return self._json(result)
             if route == "/api/sprites":
                 raw = parse_qs(url.query).get("ids", [""])[0]

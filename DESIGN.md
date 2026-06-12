@@ -345,6 +345,15 @@ browser caches repeat views. The frontend keeps an id→cell cache and
 requests only sprites it hasn't seen, so panning back is free. See
 "Format v2 revision" in section 1 for why this replaced atlas pages.
 
+### Tile contents (aggregate drill-down)
+
+`GET /api/tile?z=&tx=&ty=&token=&offset=&limit=` →
+`{"total": 1023, "ids": [...]}` — the filtered members of one tile,
+sorted by rep score descending, paginated (limit ≤ 500). Backs the
+side-panel grid shown when an aggregate marker is clicked; each page is
+one tile slice + one sprite strip, so inspecting a 100k-image pile costs
+the same as inspecting a 20-image one.
+
 ### Other endpoints
 
 - `GET /api/manifest` — the manifest (frontend bootstrap).

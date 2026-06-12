@@ -175,6 +175,21 @@ class TestEndToEnd(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.ds.make_selection([[0, 0], [1, 1]], "all")
 
+    def test_tile_members(self):
+        token, count = self.ds.make_filter("color = 'red'")
+        agg = self.ds.viewport(0, 0, 0, 1, 1, token)["aggregates"][0]
+        r = self.ds.tile_members(0, agg["tx"], agg["ty"], token, 0, 500)
+        self.assertEqual(r["total"], count)        # one z0 tile holds everything
+        self.assertEqual(len(r["ids"]), count)
+        mask = self.ds.get_mask(token)
+        self.assertTrue(all(mask[i] for i in r["ids"]))
+        reps = [float(self.ds.rep[i]) for i in r["ids"]]
+        self.assertEqual(reps, sorted(reps, reverse=True))  # best first
+        page = self.ds.tile_members(0, agg["tx"], agg["ty"], token, 2, 3)
+        self.assertEqual(page["ids"], r["ids"][2:5])        # pagination
+        empty = self.ds.tile_members(6, 1, 1, token, 0, 10)  # no fixture point here
+        self.assertEqual(empty, {"total": 0, "ids": []})
+
     def test_retile(self):
         from atlas import retile
         copy = self.tmp / "retiled"

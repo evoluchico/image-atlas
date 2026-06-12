@@ -36,9 +36,12 @@ python -m atlas serve example
 
 A browser tab opens. **Drag** to pan, **wheel** to zoom, **hover** a
 marker for details, **click** to pin, **Shift-drag** to lasso-select
-(then export the selection as CSV from the side panel). The side panel
-has a **thumbnail size** slider — markers scale and the aggregation
-grid coarsens/refines to match. Try a filter:
+(then export the selection as CSV from the side panel). **Clicking an
+aggregate** opens a paginated grid of every image inside it (current
+filter applied, best representatives first) — click any cell to inspect
+that image. The side panel also has a **thumbnail size** slider —
+markers scale and the aggregation grid coarsens/refines to match. Try a
+filter:
 
 ```sql
 family = 'rings' AND year >= 2010
