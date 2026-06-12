@@ -6,10 +6,12 @@
  */
 "use strict";
 
-const TILE_SCREEN_PX = 112;     // drives the zoom -> tile-level rule
-const AGG_BASE_PX = 42;
-const ITEM_PX = 30;
 const FETCH_DEBOUNCE_MS = 80;
+
+// marker size is user-adjustable; the tile-level rule scales with it so
+// bigger thumbnails automatically aggregate at a coarser grid
+let markerPx = +(localStorage.getItem("atlasMarkerPx") || 42);
+function tileTargetPx() { return markerPx * 8 / 3; }
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -45,7 +47,7 @@ function screenToWorld(sx, sy) {
   return [view.cx + (sx - w / 2) * view.upp, view.cy + (sy - h / 2) * view.upp];
 }
 function currentZ() {
-  const z = Math.round(Math.log2(1 / (TILE_SCREEN_PX * view.upp)));
+  const z = Math.round(Math.log2(1 / (tileTargetPx() * view.upp)));
   return Math.max(manifest.zoom.min, Math.min(manifest.zoom.max, z));
 }
 
@@ -183,14 +185,15 @@ function render() {
   ctx.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
 
   markers = [];
+  const itemPx = Math.round(markerPx * 0.7);
   for (const it of scene.items) {
     const [sx, sy] = worldToScreen(it.x, it.y);
-    const rect = drawSprite(it.id, sx, sy, ITEM_PX);
+    const rect = drawSprite(it.id, sx, sy, itemPx);
     markers.push({ ...rect, id: it.id, count: 1 });
   }
   for (const ag of scene.aggregates) {
     const [sx, sy] = worldToScreen(ag.x, ag.y);
-    const size = Math.min(64, AGG_BASE_PX + 7 * Math.log10(ag.count));
+    const size = Math.min(markerPx * 1.55, markerPx + 7 * Math.log10(ag.count));
     const rect = drawSprite(ag.id, sx, sy, size);
     drawBadge(fmtCount(ag.count), rect.x + rect.w - 4, rect.y + 2);
     markers.push({ ...rect, id: ag.id, count: ag.count });
@@ -285,7 +288,7 @@ canvas.addEventListener("wheel", (e) => {
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
   const [wx, wy] = screenToWorld(mx, my);
   const factor = Math.exp(e.deltaY * 0.0012);
-  view.upp = Math.min(uppFit * 2, Math.max(uppFit / 512, view.upp * factor));
+  view.upp = Math.min(uppFit * 2, Math.max(uppFit / 4096, view.upp * factor));
   const { w, h } = cssSize();
   view.cx = wx - (mx - w / 2) * view.upp;
   view.cy = wy - (my - h / 2) * view.upp;
@@ -326,6 +329,20 @@ async function updateDetail(id) {
     detailMeta.append(tr);
   }
 }
+
+/* ------------------------------------------------------------ size slider */
+
+const sizeSlider = document.getElementById("size-slider");
+const sizeVal = document.getElementById("size-val");
+sizeSlider.value = markerPx;
+sizeVal.textContent = `${markerPx}px`;
+sizeSlider.addEventListener("input", () => {
+  markerPx = +sizeSlider.value;
+  sizeVal.textContent = `${markerPx}px`;
+  localStorage.setItem("atlasMarkerPx", markerPx);
+  requestRender();
+  scheduleFetch();   // tile level depends on marker size
+});
 
 /* ------------------------------------------------------------- selection */
 

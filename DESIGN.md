@@ -362,8 +362,10 @@ Single page, no framework, no build step: `index.html`, `app.js`,
   (world-units-per-pixel). Drag to pan, wheel to zoom (anchored at
   cursor). World is [0,1]² with a subtle border.
 - **Zoom→tile-level rule**: request
-  `z = clamp(round(log2(canvasWidth / (112 · viewWidth))), zmin, zmax)`
-  so a tile is ~112 px on screen — one marker per ~marker-sized cell.
+  `z = clamp(round(log2(canvasWidth / (target · viewWidth))), zmin, zmax)`
+  where `target = markerPx · 8/3` — one marker per ~marker-sized cell.
+  `markerPx` is a user slider (24–96 px, persisted in localStorage), so
+  growing thumbnails automatically coarsens the aggregation grid.
 - **Data flow**: on view change (debounced ~80 ms) fetch `/api/viewport`
   for the visible bounds (±half-tile margin) and current filter token;
   render the response. Stale responses (superseded by a newer request)
@@ -389,12 +391,21 @@ Single page, no framework, no build step: `index.html`, `app.js`,
 ## 8. CLI
 
 ```
-python -m atlas build  --images DIR [--metadata CSV] [--coords CSV]
-                       [--workers N] [--cell 48] [--max-zoom 8]
+python -m atlas build  --images DIR [--files LIST] [--metadata CSV] [--coords CSV]
+                       [--workers N] [--cell 48] [--max-zoom 10]
                        [--threshold 8] [--name NAME] --out DATASET
-python -m atlas serve  DATASET [--port 8765] [--no-browser]
+python -m atlas serve  DATASET [--port 8765] [--host 127.0.0.1] [--no-browser]
+python -m atlas retile DATASET [--max-zoom 11] [--threshold N]
 python -m atlas demo   --out DIR [--count 2000]   # synthetic dataset
 ```
+
+`retile` recomputes only the tile indexes + per-tile representatives and
+updates the manifest — zoom depth and threshold derive from stored
+coordinates, so changing them never requires re-decoding images
+(~6 s at 406k vs ~20 min for a full build). Note the depth cap is also
+the splitting limit: identical images share coordinates, so a pile of
+exact duplicates remains one aggregate at any zoom — correct behavior,
+the badge counts the copies.
 
 `demo` writes a synthetic image collection (colored generative shapes in
 several visual families) + metadata CSV + coherent coords, then runs

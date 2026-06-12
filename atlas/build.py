@@ -450,7 +450,7 @@ def add_parser(sub) -> None:
     p.add_argument("--workers", type=int, default=0, help="decode workers (0 = cpu count)")
     p.add_argument("--cell", type=int, default=48, help="map sprite size in px")
     p.add_argument("--preview-max", type=int, default=512, help="detail preview max side")
-    p.add_argument("--max-zoom", type=int, default=8, choices=range(1, 13))
+    p.add_argument("--max-zoom", type=int, default=10, choices=range(1, 13))
     p.add_argument("--threshold", type=int, default=8, help="max items per tile before aggregating")
     p.add_argument("--force", action="store_true", help="overwrite existing output")
     p.set_defaults(func=run)

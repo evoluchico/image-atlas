@@ -1,6 +1,6 @@
 import argparse
 
-from . import build, demo, server
+from . import build, demo, retile, server
 
 
 def main() -> None:
@@ -8,6 +8,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     build.add_parser(sub)
     server.add_parser(sub)
+    retile.add_parser(sub)
     demo.add_parser(sub)
     args = p.parse_args()
     args.func(args)

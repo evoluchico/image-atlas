@@ -36,7 +36,9 @@ python -m atlas serve example
 
 A browser tab opens. **Drag** to pan, **wheel** to zoom, **hover** a
 marker for details, **click** to pin, **Shift-drag** to lasso-select
-(then export the selection as CSV from the side panel). Try a filter:
+(then export the selection as CSV from the side panel). The side panel
+has a **thumbnail size** slider — markers scale and the aggregation
+grid coarsens/refines to match. Try a filter:
 
 ```sql
 family = 'rings' AND year >= 2010
@@ -75,8 +77,19 @@ python -m atlas build \
   restricts the build to an exact file list — useful for excluding
   known-corrupt images while keeping IDs aligned with your coords.
 - Other knobs: `--threshold` (images per tile before aggregating,
-  default 8), `--max-zoom` (default 8), `--cell` (sprite size, default
-  48 px), `--force`.
+  default 8), `--max-zoom` (quadtree depth, default 10), `--cell`
+  (sprite size, default 48 px), `--force`.
+
+To change the zoom depth or threshold of an already-built bundle
+(seconds — no image re-decoding):
+
+```bash
+python -m atlas retile /path/to/dataset --max-zoom 11 [--threshold 8]
+```
+
+Note: clusters of *identical* images (exact duplicates share one
+embedding point) never split spatially no matter how deep you zoom —
+the count badge is telling you the truth about a pile of copies.
 
 Throughput is roughly limited by image decoding: ~400k images take
 ~20 min with 24 workers on a fast machine.
