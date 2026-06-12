@@ -26,11 +26,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
+from PIL import Image
 
 from . import FORMAT_VERSION, summarize
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_TILES_PER_QUERY = 4096
+MAX_SPRITES_PER_STRIP = 1024
+STRIP_COLS = 32  # must match frontend/app.js
 ALL_TOKEN = "all"
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -104,11 +107,18 @@ class Dataset:
         ):
             if tuple(arr.shape) != want:
                 raise DatasetError(f"{name} has shape {arr.shape}, expected {want}")
-        n_pages = len(list((self.root / "atlases").glob("atlas_*.webp")))
-        if n_pages != self.manifest["atlas"]["pages"]:
+
+        self.cell = int(self.manifest["sprite_cell"])
+        sprites_path = need("sprites.bin")
+        want_size = self.n * self.cell * self.cell * 3
+        if sprites_path.stat().st_size != want_size:
             raise DatasetError(
-                f"found {n_pages} atlas pages, manifest says {self.manifest['atlas']['pages']}"
+                f"sprites.bin is {sprites_path.stat().st_size} bytes, expected {want_size}"
             )
+        self.sprites = np.memmap(
+            sprites_path, dtype=np.uint8, mode="r", shape=(self.n, self.cell, self.cell, 3)
+        )
+        self._strips: OrderedDict[str, bytes] = OrderedDict()
 
         self.db_path = need("metadata.sqlite")
         with self._connect() as con:
@@ -282,6 +292,47 @@ class Dataset:
                 )
         return {"z": z, "aggregates": aggregates, "items": items}
 
+    # ------------------------------------------------------------ sprites
+
+    def sprite_strip(self, ids: list[int]) -> bytes:
+        """Pack the requested sprites into one WebP, STRIP_COLS per row.
+
+        This is what makes remote viewing cheap: a viewport transfers only
+        the sprites it shows (~1-2 KB each), never a shared atlas page.
+        """
+        key = ",".join(map(str, ids))
+        with self._lock:
+            hit = self._strips.get(key)
+            if hit:
+                self._strips.move_to_end(key)
+                return hit
+        c = self.cell
+        cols = min(STRIP_COLS, len(ids))
+        rows = (len(ids) + cols - 1) // cols
+        canvas = np.zeros((rows * c, cols * c, 3), np.uint8)
+        for i, img_id in enumerate(ids):
+            r, col = divmod(i, cols)
+            canvas[r * c : (r + 1) * c, col * c : (col + 1) * c] = self.sprites[img_id]
+        buf = io.BytesIO()
+        Image.fromarray(canvas).save(buf, "WEBP", quality=80)
+        body = buf.getvalue()
+        with self._lock:
+            self._strips[key] = body
+            while len(self._strips) > 32:
+                self._strips.popitem(last=False)
+        return body
+
+    def warm_sprites(self) -> None:
+        """Sequentially touch sprites.bin to pull it into the OS page cache
+        (random 7 KB reads on a cold spinning disk would dominate strip
+        latency otherwise). Runs in a daemon thread at startup."""
+        try:
+            with open(self.root / "sprites.bin", "rb") as f:
+                while f.read(1 << 24):
+                    pass
+        except OSError:
+            pass
+
     # ------------------------------------------------------------- image
 
     def image_info(self, img_id: int) -> dict | None:
@@ -363,6 +414,24 @@ class Handler(BaseHTTPRequestHandler):
                 except (ValueError, IndexError):
                     return self._error(400, "bad viewport parameters")
                 return self._json(result)
+            if route == "/api/sprites":
+                raw = parse_qs(url.query).get("ids", [""])[0]
+                try:
+                    ids = [int(s) for s in raw.split(",") if s]
+                except ValueError:
+                    return self._error(400, "ids must be comma-separated integers")
+                if not ids or len(ids) > MAX_SPRITES_PER_STRIP:
+                    return self._error(400, f"need 1..{MAX_SPRITES_PER_STRIP} ids")
+                if any(i < 0 or i >= self.ds.n for i in ids):
+                    return self._error(400, "id out of range")
+                body = self.ds.sprite_strip(ids)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/webp")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route == "/api/export":
                 token = parse_qs(url.query).get("token", [ALL_TOKEN])[0]
                 try:
@@ -383,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(400, "bad image id")
                 info = self.ds.image_info(img_id)
                 return self._json(info) if info else self._error(404, "no such image")
-            if route.startswith("/atlases/") or route.startswith("/previews/"):
+            if route.startswith("/previews/"):
                 p = self._safe_join(self.ds.root, route)
                 return self._file(p, immutable=True) if p else self._error(403, "forbidden")
             return self._error(404, "not found")
@@ -420,6 +489,7 @@ def run(args) -> None:
     ds = Dataset(Path(args.dataset))
     handler = type("BoundHandler", (Handler,), {"ds": ds})
     server = ThreadingHTTPServer((args.host, args.port), handler)
+    threading.Thread(target=ds.warm_sprites, daemon=True).start()
     url = f"http://{args.host}:{args.port}/"
     print(f"Serving '{ds.manifest['name']}' ({ds.n} images) at {url}  (Ctrl-C to stop)")
     if args.host not in ("127.0.0.1", "localhost"):

@@ -1,15 +1,8 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "name": "demo collection",
   "count": 300,
-  "atlas": {
-    "page_size": 4096,
-    "cell": 48,
-    "pad": 2,
-    "cols": 78,
-    "per_page": 6084,
-    "pages": 1
-  },
+  "sprite_cell": 48,
   "zoom": {
     "min": 0,
     "max": 8

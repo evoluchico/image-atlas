@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -30,7 +29,6 @@ def fabricate(root: Path, n: int, max_zoom: int = 8) -> None:
     rng = np.random.default_rng(0)
     points = root / "points"
     points.mkdir(parents=True)
-    (root / "atlases").mkdir()
     (root / "previews").mkdir()
 
     # clustered layout: mixture of gaussians (realistic tile skew)
@@ -68,11 +66,14 @@ def fabricate(root: Path, n: int, max_zoom: int = 8) -> None:
     con.close()
     print(f"  sqlite ({n:,} rows): {time.perf_counter() - t0:.1f}s")
 
-    Image.new("RGB", (64, 64), (40, 40, 40)).save(root / "atlases" / "atlas_0000.webp")
+    cell = 8  # small sprites keep the fabricated store at ~192 MB for 1M
+    sprites = np.memmap(root / "sprites.bin", dtype=np.uint8, mode="w+",
+                        shape=(n, cell, cell, 3))
+    sprites.flush()
+    del sprites
     (root / "manifest.json").write_text(json.dumps({
         "format_version": FORMAT_VERSION, "name": "bench", "count": n,
-        "atlas": {"page_size": 4096, "cell": 48, "pad": 2, "cols": 78,
-                   "per_page": 6084, "pages": 1},
+        "sprite_cell": cell,
         "zoom": {"min": 0, "max": max_zoom}, "aggregate_threshold": 8,
         "preview_max_side": 512, "coords_source": "random",
         "metadata_columns": [{"name": "family", "type": "TEXT"},
@@ -126,6 +127,10 @@ def main():
               lambda: ds.viewport(0, 0, 0, 1, 1, "all"))
         timed("viewport z8 quarter view, filtered",
               lambda: ds.viewport(8, 0.4, 0.4, 0.65, 0.65, token))
+
+        strip_ids = list(range(0, args.n, max(1, args.n // 250)))[:250]
+        timed("sprite strip (250 sprites, encode)",
+              lambda: (ds._strips.clear(), ds.sprite_strip(strip_ids)))
 
         circle = [[0.5 + 0.18 * np.cos(a), 0.5 + 0.18 * np.sin(a)]
                   for a in np.linspace(0, 2 * np.pi, 64)]

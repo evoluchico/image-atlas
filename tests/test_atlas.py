@@ -118,18 +118,20 @@ class TestEndToEnd(unittest.TestCase):
             Dataset(broken)
         shutil.rmtree(broken)
 
-    def test_atlas_pixels_match_derived_sprite_position(self):
-        a = self.ds.manifest["atlas"]
-        page = np.asarray(Image.open(self.ds.root / "atlases" / "atlas_0000.webp"))
-        stride = a["cell"] + 2 * a["pad"]
+    def test_sprite_store_and_strip(self):
+        c = self.ds.cell
         for img_id in (0, 1, 5, N_IMAGES - 1):
-            cell = img_id % a["per_page"]
-            row, col = divmod(cell, a["cols"])
-            cy = row * stride + a["pad"] + a["cell"] // 2
-            cx = col * stride + a["pad"] + a["cell"] // 2
             want = np.array(COLORS[img_id % len(COLORS)][1])
-            got = page[cy, cx].astype(int)
+            got = self.ds.sprites[img_id, c // 2, c // 2].astype(int)
             self.assertLess(np.abs(got - want).max(), 20, f"id={img_id}")
+        # strip: requested sprites appear at index-derived cells
+        import io
+        ids = [3, 0, 7, 1, 2]
+        strip = np.asarray(Image.open(io.BytesIO(self.ds.sprite_strip(ids))))
+        for j, img_id in enumerate(ids):
+            want = np.array(COLORS[img_id % len(COLORS)][1])
+            got = strip[c // 2, j * c + c // 2].astype(int)
+            self.assertLess(np.abs(got - want).max(), 25, f"strip pos {j}")
 
     def test_filter_and_counts(self):
         token, count = self.ds.make_filter("color = 'red'")

@@ -100,6 +100,28 @@ The starting point was a spec produced in a ChatGPT conversation
 drafts), bitmap caches per tag, cluster hints, embedding storage — all
 either superseded by later decisions in the same conversation or YAGNI.
 
+### Format v2 revision: sprite strips replace atlas pages
+
+v1 packed sprites into shared 4096² WebP atlas pages fetched by the
+frontend (sprite position a pure function of the image ID). Real-world
+use at 406k images over an SSH tunnel exposed the flaw: sprites are
+placed in build order, uncorrelated with map position, so **one
+zoomed-out view touched 59 of 67 pages ≈ 370 MB of transfer** (pages of
+busy photographs average ~6 MB), and the browser held ~4 GB of decoded
+page bitmaps. No static placement fixes the zoomed-out case — visible
+representatives always sample the whole map.
+
+v2 stores raw sprites in `sprites.bin` (N × cell² × 3 bytes, O(1) row
+access) and the server packs **exactly the sprites a viewport needs**
+into one small WebP strip per request (`/api/sprites?ids=…`,
+`STRIP_COLS = 32` per row, ≤ 1024 ids). A new view now transfers
+~10–40 KB of JSON + one ~100–400 KB image, independent of dataset size;
+the frontend caches sprites by ID and only requests missing ones. Strip
+encode is ~1 ms at 1M scale; a startup daemon thread warms the OS page
+cache over `sprites.bin` so cold-disk random reads don't dominate.
+Cost: the bundle stores raw sprites (6.9 GB at 1M with 48 px cells) —
+disk traded for interaction latency, the right trade for a local tool.
+
 ---
 
 ## 2. Goals and non-goals
@@ -145,12 +167,13 @@ coords CSV (optional)    ───►  │build │ ───►    ▼
 
 ---
 
-## 4. Dataset bundle format (`format_version: 1`)
+## 4. Dataset bundle format (`format_version: 2`)
 
 ```
 dataset/
   manifest.json               # all constants; see below
   metadata.sqlite             # table images(id PK, path, width, height, + user cols)
+  sprites.bin                 # uint8 raw (N, cell, cell, 3) — O(1) row access
   points/
     xy.npy                    # float32 (N, 2), values in [0, 1]
     rep.npy                   # float32 (N,)  rep_score
@@ -158,9 +181,6 @@ dataset/
     z{z}_keys.npy             # uint32 (T,)   sorted unique tile keys (ty * 2^z + tx)
     z{z}_starts.npy           # uint32 (T+1,) CSR offsets into z{z}_order
     z{z}_rep.npy              # uint32 (T,)   precomputed unfiltered representative per tile
-  atlases/
-    atlas_0000.webp           # 4096×4096, sprites in row-major cells
-    ...
   previews/
     000/00000000.webp         # detail previews, max side 512, shard = id // 1000
     ...
@@ -170,11 +190,10 @@ dataset/
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "name": "...",
   "count": 123456,
-  "atlas": {"page_size": 4096, "cell": 48, "pad": 2,
-             "cols": 78, "per_page": 6084, "pages": 21},
+  "sprite_cell": 48,
   "zoom": {"min": 0, "max": 8},
   "aggregate_threshold": 8,
   "preview_max_side": 512,
@@ -185,13 +204,14 @@ dataset/
 
 Invariants:
 
-- IDs are dense `0..N−1`; row `id` in SQLite ↔ index `id` in every array.
-- Sprite location is derived: `page = id // per_page`,
-  `cell = id % per_page`, `px = (cell % cols) * (cell + 2*pad) + pad`, etc.
-  (stride = cell + 2·pad = 52).
+- IDs are dense `0..N−1`; row `id` in SQLite ↔ index `id` in every array
+  ↔ row `id` in `sprites.bin`.
+- Sprites are delivered to the frontend as per-viewport strips
+  (section 6), never as whole files.
 - `serve` validates: manifest present and version supported; all arrays
-  present with length N; atlas page count matches; SQLite row count = N.
-  Any mismatch → refuse to start, with a message naming the missing piece.
+  present with length N; `sprites.bin` has exactly N·cell²·3 bytes;
+  SQLite row count = N. Any mismatch → refuse to start, with a message
+  naming the missing piece.
 
 ## 5. Build pipeline
 
@@ -205,9 +225,9 @@ Steps (single process, vectorized where it matters):
 1. **Scan & assign IDs.** Sort discovered paths for determinism; id =
    sort index.
 2. **Decode once, derive twice.** Per image: load with Pillow → 48×48
-   center-cropped sprite (into the current atlas page) → max-side-512
-   detail preview (WebP, quality 80) → 8×8 RGB feature vector (for
-   fallback layout & quality score). Corrupt files are kept as gray
+   center-cropped sprite (written to its row in `sprites.bin`) →
+   max-side-512 detail preview (WebP, quality 80) → 8×8 RGB feature
+   vector (for fallback layout & quality score). Corrupt files are kept as gray
    placeholder sprites with `quality = 0` (IDs must stay dense; dropping
    files would desynchronize provided metadata/coords).
 3. **Coordinates.** Provided CSV if given (validated, min-max normalized
@@ -314,12 +334,23 @@ interchangeable everywhere a token is accepted (viewport, export).
 `GET /api/export?token=…` → CSV download of all metadata columns plus
 `x, y` for every image in the token's set.
 
+### Sprite strips
+
+`GET /api/sprites?ids=3,17,99,…` (≤ 1024 ids) → one WebP image with the
+requested sprites in row-major cells, `STRIP_COLS = 32` per row (a
+constant shared with the frontend). The server gathers rows from the
+memory-mapped `sprites.bin` and encodes once (~1 ms + WebP encode);
+recent strips are LRU-cached, and responses carry `max-age` so the
+browser caches repeat views. The frontend keeps an id→cell cache and
+requests only sprites it hasn't seen, so panning back is free. See
+"Format v2 revision" in section 1 for why this replaced atlas pages.
+
 ### Other endpoints
 
 - `GET /api/manifest` — the manifest (frontend bootstrap).
 - `GET /api/image/{id}` — metadata row + preview URL.
-- `GET /atlases/atlas_{n}.webp`, `GET /previews/{shard}/{id}.webp` —
-  static, long-cache headers (content is immutable per bundle).
+- `GET /previews/{shard}/{id}.webp` — static, long-cache headers
+  (content is immutable per bundle).
 - `GET /` + static frontend files.
 
 ## 7. Runtime: frontend
@@ -337,11 +368,12 @@ Single page, no framework, no build step: `index.html`, `app.js`,
   for the visible bounds (±half-tile margin) and current filter token;
   render the response. Stale responses (superseded by a newer request)
   are discarded.
-- **Rendering**: sprites drawn from atlas pages via `drawImage` with
-  source rect computed from the ID (Section 4). Atlas pages load lazily
-  and the canvas re-renders when one arrives. Aggregates: sprite +
-  rounded count badge; slight size boost with log(count). Items: sprite
-  at 60% size. Everything has a hit-test rectangle kept per frame.
+- **Rendering**: sprites drawn from cached strip images via `drawImage`;
+  after each viewport response the frontend batch-requests any sprites
+  it hasn't cached (section 6) and re-renders as strips arrive.
+  Aggregates: sprite + rounded count badge; slight size boost with
+  log(count). Items: sprite at 60% size. Everything has a hit-test
+  rectangle kept per frame.
 - **Side panel**: filter input (SQL WHERE) + Apply + match count + error
   display; hover shows detail preview + metadata; click pins it (hover
   stops overriding until unpinned).
@@ -385,7 +417,8 @@ full-world view at a 1280 px window):
 | viewport, no filter | 0.4 ms | precomputed tile reps |
 | viewport, filtered | ≤ ~15 ms | mask gather dominates |
 | lasso select (64 vertices) | ~14 ms | bbox prefilter + ray casting |
-| atlas pages | ~165 pages ≈ 1–2 GB on disk | loaded lazily, a few visible at once |
+| sprite strip (250 sprites) | ~1 ms + WebP encode | one ~100–400 KB image per new view |
+| sprites.bin | 6.9 GB on disk (48 px cells) | mmapped; warmed at startup |
 | detail previews | ~30–60 KB each | fetched on hover only |
 
 The invariant that guarantees this: **no code path at interaction time

@@ -10,14 +10,15 @@ idea, rebuilt around tile-based aggregation so it scales.
 ![Image Atlas screenshot](docs-screenshot.png)
 
 **How it works in one paragraph:** an offline *build* stage turns your
-images into a self-contained dataset bundle (tiny sprites packed into
-WebP atlases, 512px detail previews, fixed 2D coordinates, quadtree tile
-indexes, SQLite metadata). A read-only *serve* stage opens that bundle in
-your browser: every visible map tile shows either its few images or one
-representative thumbnail + a count badge, so the frontend never renders
-more than a few hundred sprites no matter how big the collection is.
-Filters never move points — they only change what is visible — so you
-keep your spatial memory of the collection.
+images into a self-contained dataset bundle (a raw sprite store, 512px
+detail previews, fixed 2D coordinates, quadtree tile indexes, SQLite
+metadata). A read-only *serve* stage opens that bundle in your browser:
+every visible map tile shows either its few images or one representative
+thumbnail + a count badge, and the server packs exactly the sprites each
+view needs into one small image — so a screenful costs ~100–400 KB of
+transfer no matter how big the collection is (it works well even over an
+SSH tunnel). Filters never move points — they only change what is
+visible — so you keep your spatial memory of the collection.
 
 **Dependencies:** Python ≥ 3.10, `numpy`, `Pillow`. Nothing else. The
 frontend is plain HTML/JS/Canvas2D with no build step. Everything runs on

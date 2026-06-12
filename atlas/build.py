@@ -24,7 +24,6 @@ from . import FORMAT_VERSION, summarize
 Image.MAX_IMAGE_PIXELS = None  # local, user-owned data
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
-ATLAS_PAGE = 4096
 FEAT_SIZE = 8  # 8x8 RGB features for fallback layout + quality score
 DENSITY_BINS = 512
 
@@ -353,17 +352,12 @@ def run(args) -> None:
     if out.exists():
         shutil.rmtree(out)
     points_dir = out / "points"
-    atlases_dir = out / "atlases"
-    for d in (points_dir, atlases_dir, out / "previews"):
+    for d in (points_dir, out / "previews"):
         d.mkdir(parents=True)
 
-    cell, pad = args.cell, 2
-    stride = cell + 2 * pad
-    cols = ATLAS_PAGE // stride
-    per_page = cols * cols
-    pages = (n + per_page - 1) // per_page
+    cell = args.cell
 
-    # --- decode every image once; pack sprites into atlas pages -------
+    # --- decode every image once; store raw sprites for O(1) access -----
     tasks = (
         (i, str(images_root / rel), str(out / preview_relpath(i)), cell, args.preview_max)
         for i, rel in enumerate(rels)
@@ -371,11 +365,8 @@ def run(args) -> None:
     feats = np.empty((n, FEAT_SIZE * FEAT_SIZE * 3), np.float32)
     quality = np.empty(n, np.float32)
     sizes = [(0, 0)] * n
-    page_px = np.full((ATLAS_PAGE, ATLAS_PAGE, 3), 24, np.uint8)
-    page_no = 0
-
-    def flush_page(idx):
-        Image.fromarray(page_px).save(atlases_dir / f"atlas_{idx:04d}.webp", "WEBP", quality=85)
+    sprites = np.memmap(out / "sprites.bin", dtype=np.uint8, mode="w+",
+                        shape=(n, cell, cell, 3))
 
     workers = args.workers or os.cpu_count() or 1
     if workers > 1:
@@ -387,26 +378,18 @@ def run(args) -> None:
 
     try:
         for img_id, sprite_b, feat_b, w, h, q in results:
-            page, cell_i = divmod(img_id, per_page)
-            if page != page_no:
-                flush_page(page_no)
-                page_px[:] = 24
-                page_no = page
-            r, c = divmod(cell_i, cols)
-            py, px = r * stride + pad, c * stride + pad
-            page_px[py : py + cell, px : px + cell] = np.frombuffer(
-                sprite_b, np.uint8
-            ).reshape(cell, cell, 3)
+            sprites[img_id] = np.frombuffer(sprite_b, np.uint8).reshape(cell, cell, 3)
             feats[img_id] = np.frombuffer(feat_b, np.float32)
             quality[img_id] = q
             sizes[img_id] = (w, h)
             if (img_id + 1) % 1000 == 0 or img_id + 1 == n:
                 print(f"  images: {img_id + 1}/{n}", end="\r", flush=True)
-        flush_page(page_no)
         print()
     finally:
         if executor:
             executor.shutdown()
+        sprites.flush()
+        del sprites
 
     # --- coordinates ---------------------------------------------------
     if args.coords:
@@ -440,14 +423,7 @@ def run(args) -> None:
         "format_version": FORMAT_VERSION,
         "name": args.name or images_root.name,
         "count": n,
-        "atlas": {
-            "page_size": ATLAS_PAGE,
-            "cell": cell,
-            "pad": pad,
-            "cols": cols,
-            "per_page": per_page,
-            "pages": pages,
-        },
+        "sprite_cell": cell,
         "zoom": {"min": 0, "max": args.max_zoom},
         "aggregate_threshold": args.threshold,
         "preview_max_side": args.preview_max,

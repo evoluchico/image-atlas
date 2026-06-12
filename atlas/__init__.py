@@ -3,4 +3,4 @@
 See DESIGN.md in the project root for the full specification.
 """
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2

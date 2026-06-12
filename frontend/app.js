@@ -30,7 +30,6 @@ function activeToken() {
 }
 let fetchSeq = 0, fetchTimer = null;
 let renderQueued = false;
-const atlasPages = new Map();    // page index -> {img, loaded}
 
 /* ------------------------------------------------------------- view math */
 
@@ -50,26 +49,37 @@ function currentZ() {
   return Math.max(manifest.zoom.min, Math.min(manifest.zoom.max, z));
 }
 
-/* ------------------------------------------------------------ atlas math */
+/* ----------------------------------------------------------- sprite cache
+ * Sprites arrive as on-demand "strips": one WebP per viewport containing
+ * exactly the sprites it needs, STRIP_COLS per row (must match server).
+ */
 
-function spriteRect(id) {
-  const a = manifest.atlas;
-  const stride = a.cell + 2 * a.pad;
-  const page = Math.floor(id / a.per_page);
-  const cell = id % a.per_page;
-  const col = cell % a.cols, row = Math.floor(cell / a.cols);
-  return { page, sx: col * stride + a.pad, sy: row * stride + a.pad, size: a.cell };
-}
-function getPage(p) {
-  let entry = atlasPages.get(p);
-  if (!entry) {
+const STRIP_COLS = 32;
+const STRIP_MAX = 512;            // ids per request (server caps at 1024)
+const spriteCache = new Map();    // id -> {img: Image|null, sx, sy}
+
+function ensureSprites(ids) {
+  const missing = ids.filter((id) => !spriteCache.has(id));
+  if (!missing.length) return;
+  if (spriteCache.size > 8000) spriteCache.clear();   // crude but sufficient
+  const cell = manifest.sprite_cell;
+  for (let i = 0; i < missing.length; i += STRIP_MAX) {
+    const chunk = missing.slice(i, i + STRIP_MAX);
+    const cols = Math.min(STRIP_COLS, chunk.length);
+    chunk.forEach((id) => spriteCache.set(id, { img: null, sx: 0, sy: 0 }));
     const img = new Image();
-    entry = { img, loaded: false };
-    img.onload = () => { entry.loaded = true; requestRender(); };
-    img.src = `/atlases/atlas_${String(p).padStart(4, "0")}.webp`;
-    atlasPages.set(p, entry);
+    img.onload = () => {
+      chunk.forEach((id, j) => {
+        spriteCache.set(id, {
+          img,
+          sx: (j % cols) * cell,
+          sy: Math.floor(j / cols) * cell,
+        });
+      });
+      requestRender();
+    };
+    img.src = `/api/sprites?ids=${chunk.join(",")}`;
   }
-  return entry;
 }
 
 /* -------------------------------------------------------------- fetching */
@@ -100,6 +110,10 @@ async function doFetch() {
     const data = await res.json();
     if (seq !== fetchSeq) return;    // stale response
     scene = data;
+    ensureSprites([
+      ...scene.aggregates.map((a) => a.id),
+      ...scene.items.map((it) => it.id),
+    ]);
     requestRender();
   } catch (e) { /* server gone; keep last scene */ }
 }
@@ -113,11 +127,11 @@ function requestRender() {
 }
 
 function drawSprite(id, cxPx, cyPx, sizePx) {
-  const r = spriteRect(id);
-  const entry = getPage(r.page);
+  const entry = spriteCache.get(id);
+  const cell = manifest.sprite_cell;
   const x = cxPx - sizePx / 2, y = cyPx - sizePx / 2;
-  if (entry.loaded) {
-    ctx.drawImage(entry.img, r.sx, r.sy, r.size, r.size, x, y, sizePx, sizePx);
+  if (entry && entry.img) {
+    ctx.drawImage(entry.img, entry.sx, entry.sy, cell, cell, x, y, sizePx, sizePx);
   } else {
     ctx.fillStyle = "#2b2f38";
     ctx.fillRect(x, y, sizePx, sizePx);
