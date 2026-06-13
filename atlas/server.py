@@ -18,6 +18,7 @@ import io
 import json
 import os
 import sqlite3
+import sys
 import threading
 import webbrowser
 from collections import OrderedDict
@@ -80,7 +81,7 @@ class Dataset:
                 )
             return p
 
-        self.manifest = json.loads(need("manifest.json").read_text())
+        self.manifest = json.loads(need("manifest.json").read_text(encoding="utf-8"))
         if self.manifest.get("format_version") != FORMAT_VERSION:
             raise DatasetError(
                 f"unsupported format_version {self.manifest.get('format_version')!r} "
@@ -534,7 +535,11 @@ def run(args) -> None:
             "WARNING: bound to a non-loopback interface. The server has no "
             "authentication; anyone who can reach this host can browse the dataset."
         )
-    headless = not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    # Windows and macOS desktops always have a display; only Linux/X11 needs a
+    # display variable, whose absence means a headless server (e.g. over SSH).
+    headless = sys.platform not in ("win32", "darwin") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
     if headless and not args.no_browser:
         print(
             f"(headless session — not opening a browser. From your own machine:\n"

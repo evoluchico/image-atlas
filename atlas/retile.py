@@ -20,7 +20,7 @@ def run(args) -> None:
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"{root} is not a dataset bundle (no manifest.json)")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("format_version") != FORMAT_VERSION:
         raise SystemExit(
             f"unsupported format_version {manifest.get('format_version')!r}; re-run `atlas build`"
@@ -38,7 +38,7 @@ def run(args) -> None:
     manifest["zoom"] = {"min": 0, "max": args.max_zoom}
     if args.threshold is not None:
         manifest["aggregate_threshold"] = args.threshold
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     # stale deeper levels from a previous, deeper tiling
     for z in range(args.max_zoom + 1, 16):

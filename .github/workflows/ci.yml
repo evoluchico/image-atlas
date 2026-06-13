@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e .
+      - name: Unit + end-to-end tests
+        run: python -m unittest discover tests -v
+      - name: Build smoke test (exercises multiprocessing + file handling)
+        # 2 workers forces the spawn-based process pool on Windows/macOS, the
+        # path most likely to surface OS-specific bugs (pickling, file locks).
+        run: |
+          python -m atlas demo --out demo_ci --count 40 --workers 2
+          python -c "import sys; sys.path.insert(0,'.'); from pathlib import Path; from atlas.server import Dataset; d=Dataset(Path('demo_ci/dataset')); print('serves', d.n, 'images, format v'+str(d.manifest['format_version']))"

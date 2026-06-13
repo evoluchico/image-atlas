@@ -93,7 +93,7 @@ def run(args) -> None:
     print()
 
     meta_csv = out / "metadata.csv"
-    with open(meta_csv, "w", newline="") as f:
+    with open(meta_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)

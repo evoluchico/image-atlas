@@ -7,6 +7,7 @@ never recomputes any of this.
 from __future__ import annotations
 
 import csv
+import gc
 import json
 import os
 import re
@@ -389,7 +390,11 @@ def run(args) -> None:
         if executor:
             executor.shutdown()
         sprites.flush()
+        # Windows won't rename/delete a file (or its directory) while a memory
+        # map is open, so release the handle explicitly before the final rename.
+        sprites._mmap.close()
         del sprites
+        gc.collect()
 
     # --- coordinates ---------------------------------------------------
     if args.coords:
@@ -430,7 +435,7 @@ def run(args) -> None:
         "coords_source": coords_source,
         "metadata_columns": [{"name": i, "type": t} for i, t in user_cols],
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     if out_final.exists():
         shutil.rmtree(out_final)

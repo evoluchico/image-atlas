@@ -57,7 +57,7 @@ def main() -> None:
         "columns": columns,
         "rows": rows,
     }
-    (out / "data.json").write_text(json.dumps(data, separators=(",", ":")))
+    (out / "data.json").write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
 
     # --- sprite sheet ---------------------------------------------------
     c = ds.cell
@@ -77,11 +77,11 @@ def main() -> None:
     shutil.copy(fe / "app.js", out / "app.js")
     shutil.copy(fe / "style.css", out / "style.css")
     shutil.copy(fe / "shim.js", out / "shim.js")
-    html = (fe / "index.html").read_text().replace(
+    html = (fe / "index.html").read_text(encoding="utf-8").replace(
         '<script src="./app.js"></script>',
         '<script src="./shim.js"></script>\n<script src="./app.js"></script>',
     )
-    (out / "index.html").write_text(html)
+    (out / "index.html").write_text(html, encoding="utf-8")
 
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"static demo: {ds.n} images -> {out}  ({size / 1e6:.1f} MB)")
