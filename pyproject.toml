@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-atlas"
+version = "0.2.0"
+description = "Local-first exploration of large image collections on a fixed 2D map"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Chico Camargo", email = "chico.camargo@gmail.com" }]
+dependencies = ["numpy", "Pillow"]
+
+[project.urls]
+Homepage = "https://evoluchico.github.io/image-atlas/"
+Repository = "https://github.com/evoluchico/image-atlas"
+
+[project.scripts]
+atlas = "atlas.__main__:main"
+
+[tool.setuptools]
+packages = ["atlas"]
+
+[tool.setuptools.package-data]
+atlas = ["frontend/*"]

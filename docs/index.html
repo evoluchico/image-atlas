@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Image Atlas — explore huge image collections on a map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Image Atlas is a local-first, open-source tool for exploring image collections of up to a million images on a zoomable 2D map, with SQL filtering, lasso selection, and representative thumbnails.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav>
+  <span class="brand">Image Atlas</span>
+  <a href="demo/">Demo</a>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="how-it-works.html">How it works</a>
+  <a href="https://github.com/evoluchico/image-atlas">GitHub</a>
+  <a class="cta" href="demo/">Try the demo</a>
+</nav>
+<main>
+  <h1>See a million images at once.<br>Well — the ones that matter.</h1>
+  <p class="lead">
+    Image Atlas turns an image collection into a zoomable map. Similar
+    images sit together, dense regions collapse into a single
+    representative thumbnail with a count, and SQL filters carve the
+    collection without ever rearranging it. Local-first, open source,
+    one command to run.
+  </p>
+
+  <div class="btn-row">
+    <a class="btn primary" href="demo/">▶&nbsp; Try the live demo</a>
+    <a class="btn ghost" href="tutorial.html">Read the tutorial</a>
+  </div>
+
+  <a href="demo/"><img class="hero-img" src="assets/hero.png"
+      alt="Image Atlas showing a collection as a map of representative thumbnails with count badges"></a>
+
+  <div class="grid3">
+    <div class="card">
+      <h3>Scales to 1M images</h3>
+      <p>Quadtree aggregation means the viewer renders a few hundred
+         thumbnails at most, no matter the collection size. Benchmarked
+         at one million points; used in research at 400k.</p>
+    </div>
+    <div class="card">
+      <h3>One command</h3>
+      <p><code>atlas run --images ./photos</code> builds everything on
+         first use and opens the viewer. No notebooks, no cloud, no
+         configuration files.</p>
+    </div>
+    <div class="card">
+      <h3>SQL filtering</h3>
+      <p>Any metadata column is filterable with a plain SQL WHERE
+         clause. Points never move — filters only change what is
+         visible, so your mental map survives.</p>
+    </div>
+    <div class="card">
+      <h3>Inspect anything</h3>
+      <p>Hover for a large preview, click a stack to browse every image
+         inside it, lasso a region and export it as CSV.</p>
+    </div>
+    <div class="card">
+      <h3>Your layout, or ours</h3>
+      <p>Bring 2D coordinates from CLIP&nbsp;+&nbsp;UMAP for a semantic
+         map, or let the built-in visual layout get you started.</p>
+    </div>
+    <div class="card">
+      <h3>Local and private</h3>
+      <p>Python + numpy + Pillow, a stdlib web server bound to
+         localhost, and a no-build frontend. Your images never leave
+         your machine.</p>
+    </div>
+  </div>
+
+  <h2>Install &amp; run</h2>
+  <pre><code>pip install git+https://github.com/evoluchico/image-atlas
+atlas run --images /path/to/your/images</code></pre>
+  <p class="muted small">
+    First run builds the dataset (the only slow step — it decodes every
+    image once); later runs open instantly. See the
+    <a href="tutorial.html">tutorial</a> for metadata, embeddings and
+    all options.
+  </p>
+
+  <h2>Why a map?</h2>
+  <p>
+    Folder grids and search boxes answer questions you already know how
+    to ask. A stable spatial layout answers the other kind: it shows the
+    <em>shape</em> of a collection — its clusters, gradients, outliers
+    and duplicates — and it lets you build spatial memory, so "that
+    corner with the protest photos" stays where you left it, whatever
+    filters you apply. Image Atlas is a continuation of ideas from the
+    <a href="https://collection-space-navigator.github.io/">Collection
+    Space Navigator</a>, re-engineered around tile aggregation so the
+    experience survives a million images.
+  </p>
+</main>
+<footer>
+  Image Atlas · MIT license ·
+  <a href="https://github.com/evoluchico/image-atlas">github.com/evoluchico/image-atlas</a>
+</footer>
+</body>
+</html>

@@ -438,10 +438,8 @@ def run(args) -> None:
     print(f"Done: {out_final}")
 
 
-def add_parser(sub) -> None:
-    p = sub.add_parser("build", help="build a dataset bundle from raw images")
-    p.add_argument("--images", required=True, help="directory of images (recursive)")
-    p.add_argument("--out", required=True, help="output dataset directory")
+def add_build_options(p) -> None:
+    """Build-stage options shared by `atlas build` and `atlas run`."""
     p.add_argument("--files", help="text file listing image paths relative to --images "
                                    "(one per line); skips directory scanning")
     p.add_argument("--metadata", help="CSV with a path/filename column + metadata columns")
@@ -452,5 +450,12 @@ def add_parser(sub) -> None:
     p.add_argument("--preview-max", type=int, default=512, help="detail preview max side")
     p.add_argument("--max-zoom", type=int, default=10, choices=range(1, 13))
     p.add_argument("--threshold", type=int, default=8, help="max items per tile before aggregating")
+
+
+def add_parser(sub) -> None:
+    p = sub.add_parser("build", help="build a dataset bundle from raw images")
+    p.add_argument("--images", required=True, help="directory of images (recursive)")
+    p.add_argument("--out", required=True, help="output dataset directory")
+    add_build_options(p)
     p.add_argument("--force", action="store_true", help="overwrite existing output")
     p.set_defaults(func=run)

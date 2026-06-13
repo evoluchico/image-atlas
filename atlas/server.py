@@ -30,7 +30,7 @@ from PIL import Image
 
 from . import FORMAT_VERSION, summarize
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 MAX_TILES_PER_QUERY = 4096
 MAX_SPRITES_PER_STRIP = 1024
 STRIP_COLS = 32  # must match frontend/app.js

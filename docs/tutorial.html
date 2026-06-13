@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tutorial — Image Atlas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav>
+  <span class="brand">Image Atlas</span>
+  <a href="demo/">Demo</a>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="how-it-works.html">How it works</a>
+  <a href="https://github.com/evoluchico/image-atlas">GitHub</a>
+</nav>
+<main><article>
+
+<h1>Tutorial</h1>
+<p class="lead">
+  From a folder of images to an interactive map: everything you can do
+  in the backend to prepare a collection, and everything you can do in
+  the viewer once it's running.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#install">1. Install</a></li>
+    <li><a href="#quick">2. The one-command quick start</a></li>
+    <li><a href="#backend">3. Backend: preparing your collection</a>
+      — <a href="#metadata">metadata</a> ·
+        <a href="#coords">coordinates</a> ·
+        <a href="#files">excluding files</a> ·
+        <a href="#options">options</a> ·
+        <a href="#retile">retiling</a> ·
+        <a href="#bundle">the bundle</a></li>
+    <li><a href="#looking">4. What you are looking at</a>
+      — <a href="#stacks">how image stacks are produced</a></li>
+    <li><a href="#frontend">5. Frontend: exploring the map</a></li>
+    <li><a href="#remote">6. Remote &amp; headless machines</a></li>
+    <li><a href="#faq">7. FAQ</a></li>
+  </ul>
+</div>
+
+<h2 id="install">1. Install</h2>
+<p>You need Python ≥ 3.10. Then:</p>
+<pre><code>pip install git+https://github.com/evoluchico/image-atlas</code></pre>
+<p>
+  That installs the <code>atlas</code> command and its only two
+  dependencies, <code>numpy</code> and <code>Pillow</code>. (You can
+  also <code>git clone</code> the repository and use
+  <code>python -m atlas</code> instead of <code>atlas</code> —
+  everything below works either way.)
+</p>
+
+<h2 id="quick">2. The one-command quick start</h2>
+<pre><code>atlas run --images /path/to/your/images</code></pre>
+<p>This single command does everything:</p>
+<ol>
+  <li><strong>First run:</strong> it builds a <em>dataset bundle</em> in a
+      folder next to your images (e.g. <code>images_atlas/</code>).
+      This is the only slow step — every image is decoded once to make
+      a small map thumbnail and a 512&nbsp;px preview. Expect roughly
+      1,000–20,000 images per minute depending on your CPU and disk.</li>
+  <li><strong>Then (and on every later run, instantly):</strong> it starts a
+      local web server and opens the map in your browser.</li>
+</ol>
+<p>
+  No metadata? No embeddings? It still works: you get a map laid out by
+  visual similarity of color (a crude but serviceable default), and you
+  can filter on <code>path</code>, <code>width</code> and
+  <code>height</code>. The sections below add the good stuff.
+</p>
+<p class="muted small">
+  Don't want to install anything yet? Generate a synthetic playground:
+  <code>atlas demo --out /tmp/demo</code>, then
+  <code>atlas serve /tmp/demo/dataset</code>. Or just open the
+  <a href="demo/">browser demo</a>.
+</p>
+
+<h2 id="backend">3. Backend: preparing your collection for display</h2>
+<p>
+  The backend has two separate stages, and the separation is strict by
+  design: <strong>build</strong> (slow, offline, run when your collection
+  changes) and <strong>serve</strong> (instant, read-only, run whenever
+  you want to look). <code>atlas run</code> wraps both; you can also
+  call them explicitly:
+</p>
+<pre><code>atlas build --images DIR [options] --out DATASET     # prepare
+atlas serve DATASET                                   # display</code></pre>
+<p>
+  <code>serve</code> never recomputes anything. If a bundle is
+  incomplete or from an older version, it refuses to start and tells
+  you exactly what to rebuild — it will never silently regenerate data.
+</p>
+
+<h3 id="metadata">3.1 Metadata (makes the collection filterable)</h3>
+<p>
+  Provide a CSV with one column containing filenames or paths, plus any
+  other columns you like:
+</p>
+<pre><code>filename,author,year,topic,license
+photo_001.jpg,Alice,2019,protest,CC-BY
+photo_002.jpg,Bob,2021,architecture,CC0
+...</code></pre>
+<pre><code>atlas run --images ./photos --metadata metadata.csv</code></pre>
+<p>
+  The join column is detected automatically (matching by full path,
+  filename, or filename-without-extension), column types are inferred
+  (integer / real / text), and <em>every column becomes filterable</em>
+  in the viewer with SQL. Images missing from the CSV simply get empty
+  metadata; they still appear on the map.
+</p>
+
+<h3 id="coords">3.2 Coordinates (makes the map <em>semantic</em>)</h3>
+<p>
+  The position of each image on the map is fixed at build time. By
+  default it is computed from raw color statistics — fine for a first
+  look, but the map becomes far more meaningful if you supply 2D
+  coordinates from an <em>embedding projection</em>, so that images
+  that are semantically similar (same objects, style, composition) sit
+  together. Supply them as a CSV:
+</p>
+<pre><code>path,x,y
+photo_001.jpg,4.27,-1.83
+photo_002.jpg,-2.10,0.55
+...</code></pre>
+<pre><code>atlas run --images ./photos --metadata metadata.csv --coords coords.csv</code></pre>
+<p>
+  Any coordinate scale works (they are normalized to the map square).
+  The classic recipe to produce them — the same family of pipeline used
+  by the Collection Space Navigator — is CLIP embeddings + UMAP:
+</p>
+<pre><code># pip install open_clip_torch umap-learn pillow torch
+import csv, glob, torch, umap, open_clip
+from PIL import Image
+
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k")
+model.eval()
+
+paths = sorted(glob.glob("photos/**/*.jpg", recursive=True))
+embs = []
+with torch.no_grad():
+    for p in paths:                       # batch this for real datasets
+        img = preprocess(Image.open(p).convert("RGB")).unsqueeze(0)
+        embs.append(model.encode_image(img)[0].numpy())
+
+xy = umap.UMAP(n_neighbors=15, min_dist=0.1,
+               metric="cosine").fit_transform(embs)
+
+with open("coords.csv", "w", newline="") as f:
+    w = csv.writer(f); w.writerow(["path", "x", "y"])
+    for p, (x, y) in zip(paths, xy):
+        w.writerow([p, f"{x:.5f}", f"{y:.5f}"])</code></pre>
+<p class="muted small">
+  Embeddings are deliberately <em>outside</em> Image Atlas: they need
+  heavy ML dependencies and a one-off computation, while the atlas
+  itself stays lightweight. Any 2D layout works — t-SNE, PCA, or even
+  hand-crafted axes like <code>year</code> × <code>some score</code>.
+</p>
+
+<h3 id="files">3.3 Excluding files</h3>
+<p>
+  To build from an exact list (for example, excluding images your
+  embedding pipeline flagged as corrupt), pass a text file of paths
+  relative to <code>--images</code>, one per line:
+</p>
+<pre><code>atlas run --images ./photos --files valid_files.txt --coords coords.csv</code></pre>
+
+<h3 id="options">3.4 Build options</h3>
+<table>
+  <tr><th>flag</th><th>default</th><th>meaning</th></tr>
+  <tr><td><code>--workers N</code></td><td>all cores</td>
+      <td>parallel image decoding</td></tr>
+  <tr><td><code>--threshold N</code></td><td>8</td>
+      <td>max images shown individually in a map cell before they
+          collapse into a stack</td></tr>
+  <tr><td><code>--max-zoom Z</code></td><td>10</td>
+      <td>depth of the aggregation grid (2<sup>Z</sup>×2<sup>Z</sup>
+          cells at the deepest level)</td></tr>
+  <tr><td><code>--cell PX</code></td><td>48</td>
+      <td>size of the small map thumbnails</td></tr>
+  <tr><td><code>--preview-max PX</code></td><td>512</td>
+      <td>size of the hover/detail previews</td></tr>
+  <tr><td><code>--name "..."</code></td><td>folder name</td>
+      <td>title shown in the viewer</td></tr>
+  <tr><td><code>--rebuild</code> / <code>--force</code></td><td>—</td>
+      <td>rebuild even if a bundle exists
+          (<code>run</code> / <code>build</code> respectively)</td></tr>
+</table>
+
+<h3 id="retile">3.5 Retiling (change settings without rebuilding)</h3>
+<p>
+  The aggregation depth and threshold derive purely from the stored
+  coordinates, so changing them takes seconds, not a rebuild:
+</p>
+<pre><code>atlas retile DATASET --max-zoom 11 --threshold 12</code></pre>
+
+<h3 id="bundle">3.6 What the build produces</h3>
+<p>
+  The bundle is a self-contained folder — copy it to another machine,
+  archive it, or serve it from a NAS; it does not reference your
+  original images at runtime:
+</p>
+<pre><code>dataset/
+  manifest.json     dataset constants (count, zoom depth, columns, ...)
+  metadata.sqlite   one row per image; what SQL filters run against
+  sprites.bin       all map thumbnails, raw, O(1) access by image id
+  points/           coordinates, scores, and per-zoom tile indexes
+  previews/         512px previews, fetched only on hover/click</code></pre>
+
+<h2 id="looking">4. What you are looking at</h2>
+<p>
+  When the viewer opens you see a dark square — the <strong>map</strong> —
+  scattered with thumbnails. Here is precisely what everything means:
+</p>
+<ul>
+  <li><strong>The map is a fixed 2D space.</strong> Every image in your
+      collection has one permanent position in it, given by your
+      coordinates (section 3.2). Nearby images are similar; distance
+      means dissimilarity. Positions <em>never change</em> — not when
+      you zoom, not when you filter. This is what lets you build a
+      mental map of the collection.</li>
+  <li><strong>A lone small thumbnail is one image</strong>, drawn at its
+      true position.</li>
+  <li><strong>A larger thumbnail with a number badge is an "image
+      stack"</strong> (an <em>aggregate</em>): a region that contains
+      more images than can be sensibly drawn. The badge is the exact
+      count of images in that region; the thumbnail is one real image
+      chosen to represent them (how it's chosen — next section). A badge
+      reading <code>2.6k</code> means: there are 2,600 images here; zoom
+      in or click to see more.</li>
+  <li><strong>The status line</strong> (bottom left) shows the current
+      aggregation level <code>z</code> and how many stacks/items are on
+      screen.</li>
+</ul>
+
+<h3 id="stacks">4.1 How the image stacks are produced</h3>
+<p>This is the heart of the tool, and it is simple enough to state exactly:</p>
+<ol>
+  <li><strong>The map is cut into a grid.</strong> At zoom level
+      <code>z</code> the unit square is divided into
+      2<sup>z</sup>&nbsp;×&nbsp;2<sup>z</sup> equal cells ("tiles") — a
+      quadtree: each cell splits into four at the next level. The
+      viewer picks <code>z</code> automatically so that one cell is
+      roughly one thumbnail wide on your screen (the thumbnail-size
+      slider therefore also changes <code>z</code>).</li>
+  <li><strong>Each cell counts its images</strong> — only those that
+      pass the current filter. Empty cells show nothing. Cells with at
+      most <em>threshold</em> images (default 8) show them
+      individually. Cells with more become one stack.</li>
+  <li><strong>The stack's representative is chosen in three steps:</strong>
+      <ol type="a">
+        <li>compute the cell's center of mass, weighting each image by
+            its precomputed <em>representativeness score</em>
+            (<code>0.7 × local density + 0.3 × image quality</code> —
+            images from dense neighborhoods are more typical; broken or
+            blank images score zero);</li>
+        <li>snap that center to the nearest real image, so the anchor
+            is never empty space;</li>
+        <li>pick the image maximizing
+            <code>score − 0.25 × distance&nbsp;to&nbsp;anchor</code> —
+            i.e. the most representative image that is also near the
+            middle of what it represents.</li>
+      </ol></li>
+</ol>
+<p>
+  Two properties follow. First, <strong>counts are always exact</strong> —
+  every image in view is in exactly one stack or shown individually, so
+  badge totals always sum to the filtered collection size. Second,
+  <strong>stacks respond to filters</strong>: filter to
+  <code>year = 2020</code> and each stack re-counts and re-chooses its
+  representative among the surviving images only — while every position
+  stays put.
+</p>
+<blockquote>
+  Why not "real" clustering (k-means, HDBSCAN, …)? Because it isn't
+  needed for legibility, it's expensive at scale, and it makes layouts
+  unstable under filtering. The grid is dumb, fast, exact — and the
+  embedding layout already did the semantic work. See
+  <a href="how-it-works.html">How it works</a> for the full argument.
+</blockquote>
+
+<h2 id="frontend">5. Frontend: exploring the map</h2>
+<table>
+  <tr><th>action</th><th>what happens</th></tr>
+  <tr><td><strong>drag</strong></td>
+      <td>pan around the map</td></tr>
+  <tr><td><strong>mouse wheel</strong></td>
+      <td>zoom (anchored at the cursor). Zooming in splits stacks into
+          smaller stacks and eventually individual images; zooming out
+          merges them back</td></tr>
+  <tr><td><strong>hover a thumbnail</strong></td>
+      <td>its 512&nbsp;px preview and full metadata appear in the side
+          panel</td></tr>
+  <tr><td><strong>click a single image</strong></td>
+      <td>pins it in the side panel (hover stops overriding); click the
+          map background to unpin</td></tr>
+  <tr><td><strong>click a stack</strong></td>
+      <td>opens a <em>contents grid</em> in the side panel: every image
+          inside that cell, most representative first, 60 at a time
+          with a "Show more" button. Click any grid cell to inspect
+          that image. This is how you look inside piles that are too
+          dense to split spatially (e.g. near-duplicates)</td></tr>
+  <tr><td><strong>filter box</strong></td>
+      <td>type a SQL WHERE clause over your metadata columns and press
+          <kbd>Enter</kbd> (or Apply). Examples:<br>
+          <code>year = 2020</code><br>
+          <code>topic LIKE '%protest%' AND year &gt;= 2021</code><br>
+          <code>width &gt; height</code><br>
+          The match count is shown; stacks re-count instantly; points
+          never move. Clear restores everything</td></tr>
+  <tr><td><strong>thumbnail size slider</strong></td>
+      <td>scales all thumbnails (24–96&nbsp;px); the aggregation grid
+          coarsens or refines to match, so thumbnails never overlap
+          into mush</td></tr>
+  <tr><td><strong><kbd>Shift</kbd> + drag</strong></td>
+      <td>lasso-select a free-form region. The selection count appears
+          in the panel; the map dims to the selection; <em>Export
+          CSV</em> downloads all metadata + coordinates of the selected
+          images (it composes with the active filter); <em>Clear
+          selection</em> restores the previous view</td></tr>
+</table>
+<p>
+  A typical research loop: filter to a slice → glance at the map shape →
+  zoom into an unexpected blob → click the stack → read actual images →
+  lasso the region → export CSV → join the IDs/paths back into your
+  analysis.
+</p>
+
+<h2 id="remote">6. Remote &amp; headless machines</h2>
+<p>
+  Collections often live on a lab server. The atlas server binds to
+  localhost only (it has no authentication), and on a machine with no
+  display it skips opening a browser and prints exactly what to do —
+  SSH port forwarding:
+</p>
+<pre><code># on your own machine
+ssh -L 8765:localhost:8765 you@lab-server
+# then open http://localhost:8765/ in your local browser</code></pre>
+<p class="muted small">
+  Already connected? Type <kbd>~C</kbd> in the SSH session and add
+  <code>-L 8765:localhost:8765</code> without reconnecting. If you must
+  expose it on a trusted LAN directly, <code>--host 0.0.0.0</code>
+  exists — but prefer the tunnel.
+</p>
+
+<h2 id="faq">7. FAQ</h2>
+<h3>A stack refuses to split, no matter how far I zoom.</h3>
+<p>
+  Almost always that pile is <em>exact or near-duplicate images</em>:
+  copies share (virtually) one embedding point, and no spatial zoom can
+  separate identical coordinates. The badge is real information — "this
+  exact image occurs 549 times" — and clicking the stack lets you browse
+  the copies. If your data is merely <em>dense</em> rather than
+  duplicated, deepen the grid: <code>atlas retile DATASET --max-zoom 11</code>.
+</p>
+<h3>Some images are gray squares.</h3>
+<p>
+  Files that failed to decode at build time get a placeholder (and a
+  quality score of zero, so they are never chosen as representatives).
+  The build keeps them so that IDs stay aligned with your metadata; use
+  <code>--files</code> to exclude them entirely.
+</p>
+<h3>How big can I go?</h3>
+<p>
+  The runtime is benchmarked at 1,000,000 images: viewport queries are
+  ~0.4–15&nbsp;ms and any screenful costs a few hundred KB of transfer.
+  Build time and disk are the practical limits — roughly 25&nbsp;min and
+  ~30&nbsp;GB per 400k images (mostly the previews).
+</p>
+<h3>Can I change the map layout later?</h3>
+<p>
+  Coordinates are fixed per bundle (that's a feature). To try a new
+  projection, rebuild with a different <code>--coords</code> into a new
+  output folder — your original bundle remains usable.
+</p>
+
+</article></main>
+<footer>
+  Image Atlas · <a href="index.html">home</a> ·
+  <a href="how-it-works.html">how it works</a> ·
+  <a href="https://github.com/evoluchico/image-atlas">GitHub</a>
+</footer>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Image Atlas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<main id="map-wrap">
+  <canvas id="map"></canvas>
+  <div id="hud"></div>
+</main>
+<aside id="panel">
+  <header>
+    <h1 id="ds-name">Image Atlas</h1>
+    <div id="ds-count" class="muted"></div>
+  </header>
+  <section id="filter-box">
+    <label for="filter-input">Filter (SQL WHERE on <code>images</code>)</label>
+    <textarea id="filter-input" rows="2" spellcheck="false"
+      placeholder="e.g.  family = 'rings' AND year &gt;= 2000"></textarea>
+    <div class="filter-row">
+      <button id="filter-apply">Apply</button>
+      <button id="filter-clear" class="secondary">Clear</button>
+      <span id="filter-status" class="muted"></span>
+    </div>
+    <div id="filter-error"></div>
+  </section>
+  <section id="display-box">
+    <label for="size-slider">Thumbnail size <span id="size-val"></span></label>
+    <input type="range" id="size-slider" min="24" max="96" step="2">
+  </section>
+  <section id="selection" class="hidden">
+    <div><strong id="sel-count"></strong> <span class="muted">selected by lasso</span></div>
+    <div class="filter-row">
+      <button id="sel-export">Export CSV</button>
+      <button id="sel-clear" class="secondary">Clear selection</button>
+    </div>
+  </section>
+  <section id="detail" class="hidden">
+    <div id="detail-pin" class="muted"></div>
+    <img id="detail-img" alt="">
+    <table id="detail-meta"></table>
+  </section>
+  <section id="contents" class="hidden">
+    <div id="contents-count" class="muted"></div>
+    <canvas id="contents-grid"></canvas>
+    <button id="contents-more" class="secondary">Show more</button>
+  </section>
+  <section id="help" class="muted">
+    Drag to pan · wheel to zoom · hover a marker for details · click to pin ·
+    <b>Shift-drag</b> to lasso-select. Badges show how many images a marker
+    summarizes.
+  </section>
+</aside>
+<script src="./shim.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

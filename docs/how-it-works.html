@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How it works — Image Atlas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav>
+  <span class="brand">Image Atlas</span>
+  <a href="demo/">Demo</a>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="how-it-works.html">How it works</a>
+  <a href="https://github.com/evoluchico/image-atlas">GitHub</a>
+</nav>
+<main><article>
+
+<h1>How it works</h1>
+<p class="lead">
+  The architecture, the data model, and the design decisions behind
+  them. If the <a href="tutorial.html">tutorial</a> is "how to use it",
+  this is "why it's built this way". The authoritative version lives in
+  <a href="https://github.com/evoluchico/image-atlas/blob/master/DESIGN.md"><code>DESIGN.md</code></a>.
+</p>
+
+<h2>The core idea</h2>
+<p>
+  You cannot draw a million images. You cannot even draw a million dots
+  interactively in a comfortable way, and you certainly cannot read
+  them. Every system that explores collections at this scale must show
+  <em>summaries</em> that become more detailed as you zoom — a
+  level-of-detail strategy, exactly like map software showing "12
+  restaurants" before showing each pin.
+</p>
+<p>
+  Image Atlas makes one firm commitment that everything else follows
+  from: <strong>image positions are computed once and never change</strong>.
+  A filter doesn't re-project the collection; it just hides points. This
+  preserves the user's spatial memory — the single most valuable thing a
+  map UI offers — and it makes the runtime cheap, because the only thing
+  that varies per interaction is <em>which</em> points are visible, never
+  <em>where</em> they are.
+</p>
+
+<h2>Two stages, strictly separated</h2>
+<p>
+  <strong>Build</strong> is offline and slow; <strong>serve</strong> is
+  online and instant and read-only. The serve stage recomputes nothing
+  and will refuse to start on an incomplete bundle rather than silently
+  regenerate it. This separation is the contract that keeps interaction
+  fast: all expensive, stable work (decoding, layout, scoring, tiling)
+  happens once, at build.
+</p>
+
+<h2>The data model</h2>
+<p>A built bundle is a self-contained folder:</p>
+<table>
+  <tr><th>file</th><th>holds</th><th>why</th></tr>
+  <tr><td><code>manifest.json</code></td><td>constants</td>
+      <td>count, zoom depth, thumbnail size, metadata schema</td></tr>
+  <tr><td><code>metadata.sqlite</code></td><td>one row per image</td>
+      <td>what SQL filters execute against; opened read-only</td></tr>
+  <tr><td><code>sprites.bin</code></td><td>raw map thumbnails</td>
+      <td>a flat <code>N×cell×cell×3</code> array — any thumbnail is an
+          O(1) offset, memory-mapped</td></tr>
+  <tr><td><code>points/xy.npy</code></td><td>coordinates</td>
+      <td>fixed position of every image, normalized to [0,1]²</td></tr>
+  <tr><td><code>points/rep.npy</code></td><td>scores</td>
+      <td>per-image representativeness</td></tr>
+  <tr><td><code>points/z{z}_*.npy</code></td><td>tile indexes</td>
+      <td>per zoom level: image ids sorted by tile, in compressed-sparse
+          form, plus each tile's precomputed representative</td></tr>
+  <tr><td><code>previews/</code></td><td>512px previews</td>
+      <td>fetched only on hover/click</td></tr>
+</table>
+<p>
+  Image IDs are dense (<code>0…N−1</code>) and identical across every
+  structure: row <code>i</code> of the SQLite table is row <code>i</code>
+  of <code>sprites.bin</code> is index <code>i</code> of the coordinate
+  array. That alignment is what makes a filter (a set of IDs) compose
+  with a tile (also a set of IDs) by a plain boolean mask.
+</p>
+
+<h2>The runtime hot path</h2>
+<p>Every interaction reduces to this, and only this:</p>
+<ol>
+  <li><strong>Filter →</strong> run the SQL WHERE once, turn the matching
+      IDs into a boolean mask of length N (1&nbsp;MB per million
+      images), cache it under a token.</li>
+  <li><strong>Viewport →</strong> for each visible tile, take its member
+      IDs (a precomputed slice), keep those the mask allows, count them,
+      and either emit them individually or choose one representative.</li>
+</ol>
+<p>
+  Nothing ever scans the whole collection during interaction. The
+  unfiltered case is even cheaper — each tile's representative is
+  precomputed at build, so panning around an unfiltered map is almost
+  free. Measured at one million points: a filter is 40–140&nbsp;ms
+  (then cached to ~0), a viewport query is 0.4–15&nbsp;ms.
+</p>
+
+<h3>How a region becomes one thumbnail</h3>
+<p>
+  Within a tile that exceeds the threshold, the representative is chosen
+  by: weighted center of mass (weight = representativeness score) →
+  snap to the nearest real image → maximize
+  <code>score − 0.25·distance_to_anchor</code>. Cheap, stable, and it
+  lands on a real, central, typical image rather than empty space or an
+  outlier. The full reasoning, including why this beats clustering, is
+  in the <a href="tutorial.html#stacks">tutorial</a>.
+</p>
+
+<h2>Getting thumbnails to the browser</h2>
+<p>
+  This is the one place the design was rebuilt after meeting reality. The
+  obvious approach — pack thumbnails into big shared "atlas" images the
+  browser downloads — fails at scale: thumbnails packed in build order
+  have no relationship to map position, so a single zoomed-out view
+  touches nearly every atlas page. At 400k images that was hundreds of
+  megabytes per view over an SSH tunnel.
+</p>
+<p>
+  Instead, the server reads exactly the thumbnails a given view needs
+  from <code>sprites.bin</code> and packs them into one small image
+  ("sprite strip") on demand. A screenful costs ~100–400&nbsp;KB
+  regardless of collection size; the browser caches strips by ID, so
+  panning back is free. Encoding a strip takes about a millisecond.
+</p>
+
+<h2>Deliberately simple choices</h2>
+<table>
+  <tr><th>decision</th><th>instead of</th><th>because</th></tr>
+  <tr><td>Canvas2D</td><td>WebGL</td>
+      <td>aggregation means ≤ a few hundred sprites are ever drawn;
+          WebGL would be machinery without a payoff</td></tr>
+  <tr><td>SQLite (stdlib)</td><td>DuckDB / a vector DB</td>
+      <td>"return the IDs matching this WHERE over ≤1M rows" is squarely
+          in SQLite's comfort zone; no extra dependency</td></tr>
+  <tr><td>stdlib HTTP server</td><td>a web framework</td>
+      <td>a handful of routes; nothing to add</td></tr>
+  <tr><td>grid aggregation</td><td>k-means / HDBSCAN clustering</td>
+      <td>the embedding already did the semantic grouping; a grid is
+          exact, fast, and stable under filtering</td></tr>
+  <tr><td>boolean mask</td><td>roaring bitmaps</td>
+      <td>dense IDs make a plain numpy bool array intersect at memory
+          speed; 1&nbsp;MB/million is nothing</td></tr>
+  <tr><td>no-build frontend</td><td>React / a bundler</td>
+      <td>three files, zero toolchain, trivial to audit and host
+          statically</td></tr>
+</table>
+<p>
+  The throughline: do the hard work once at build, keep the runtime a
+  thin layer over precomputed arrays, and let the browser render what
+  it's told. That's what makes a million images feel boring to navigate
+  — which is the goal.
+</p>
+
+<h2>This very demo</h2>
+<p>
+  The <a href="demo/">live demo</a> on this site has no backend at all.
+  An export step bakes a small dataset into a single data file plus one
+  sprite sheet, and a ~250-line shim re-implements the server's API in
+  the browser using the same algorithms. The actual viewer code runs
+  unmodified — proof that the frontend really is just a renderer over a
+  small, well-defined API.
+</p>
+
+</article></main>
+<footer>
+  Image Atlas · <a href="index.html">home</a> ·
+  <a href="tutorial.html">tutorial</a> ·
+  <a href="https://github.com/evoluchico/image-atlas">GitHub</a>
+</footer>
+</body>
+</html>

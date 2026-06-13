@@ -7,7 +7,11 @@ aggregation. A successor experiment to the
 [Collection Space Navigator](https://github.com/Collection-Space-Navigator/CSN)
 idea, rebuilt around tile-based aggregation so it scales.
 
-![Image Atlas screenshot](docs-screenshot.png)
+**[Website &amp; live demo](https://evoluchico.github.io/image-atlas/)** ·
+**[Tutorial](https://evoluchico.github.io/image-atlas/tutorial.html)** ·
+**[How it works](https://evoluchico.github.io/image-atlas/how-it-works.html)**
+
+![Image Atlas screenshot](docs/assets/hero.png)
 
 **How it works in one paragraph:** an offline *build* stage turns your
 images into a self-contained dataset bundle (a raw sprite store, 512px
@@ -24,9 +28,24 @@ visible — so you keep your spatial memory of the collection.
 frontend is plain HTML/JS/Canvas2D with no build step. Everything runs on
 `127.0.0.1`; no cloud, no telemetry.
 
-## Quick start (bundled example)
+## Install
 
-A tiny 300-image example dataset ships with the repo:
+```bash
+pip install git+https://github.com/evoluchico/image-atlas
+```
+
+Installs the `atlas` command plus its only dependencies (numpy, Pillow).
+Or `git clone` and use `python -m atlas` instead of `atlas` — both work.
+
+## Quick start
+
+One command — build (first run, slow) then serve (instant thereafter):
+
+```bash
+atlas run --images /path/to/your/images
+```
+
+Or explore the bundled 300-image example without your own data:
 
 ```bash
 git clone https://github.com/evoluchico/image-atlas
@@ -161,14 +180,17 @@ cold SQL filter 40–140 ms (then cached).
 
 ```
 atlas/        Python package
+  run.py        one-command build-if-needed + serve
   build.py      preprocessing pipeline (images -> dataset bundle)
   server.py     local HTTP server: filtering, tile summarization, selection
+  retile.py     change zoom depth / threshold without rebuilding
   summarize.py  representative-selection heuristic (shared build/serve)
   demo.py       synthetic dataset generator
-frontend/     index.html / app.js / style.css — no build step
-scripts/      dataset-specific prep templates
+  frontend/     index.html / app.js / style.css (+ shim.js) — no build step
+scripts/      prep templates + static-demo exporter
 tests/        test suite + 1M scale benchmark
 example/      small prebuilt dataset for the quick start
+docs/         website + live demo (GitHub Pages)
 DESIGN.md     the full design document — read before structural changes
 ```
 
