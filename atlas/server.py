@@ -13,6 +13,7 @@ Endpoints (DESIGN.md section 6):
 from __future__ import annotations
 
 import csv
+import gc
 import hashlib
 import io
 import json
@@ -84,15 +85,22 @@ class Dataset:
 
     def close(self) -> None:
         """Release all memory-maps. Required on Windows before the bundle
-        directory can be moved or deleted (an open map locks the file)."""
-        for arr in self._maps:
-            mm = getattr(arr, "_mmap", None)
+        directory can be moved or deleted (an open map locks the file).
+
+        A numpy memmap array exports a pointer to its mmap, so the mmap can't
+        be closed until every referencing array is dropped — hence we clear the
+        array references and gc first, then close the (now unexported) maps."""
+        mmaps = [getattr(a, "_mmap", None) for a in self._maps]
+        self._maps = []
+        self.xy = self.rep = self.sprites = None
+        self.tiles = {}
+        gc.collect()
+        for mm in mmaps:
             if mm is not None:
                 try:
                     mm.close()
-                except (ValueError, OSError):
+                except (ValueError, OSError, BufferError):
                     pass
-        self._maps = []
 
     def __enter__(self):
         return self
