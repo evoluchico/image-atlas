@@ -405,6 +405,8 @@ python -m atlas build  --images DIR [--files LIST] [--metadata CSV] [--coords CS
                        [--threshold 8] [--name NAME] --out DATASET
 python -m atlas serve  DATASET [--port 8765] [--host 127.0.0.1] [--no-browser]
 python -m atlas retile DATASET [--max-zoom 11] [--threshold N]
+python -m atlas label  DATASET [--column COL]     # region labels + density
+python -m atlas run    --images DIR [...]          # build-if-needed then serve
 python -m atlas demo   --out DIR [--count 2000]   # synthetic dataset
 ```
 
@@ -415,6 +417,29 @@ coordinates, so changing them never requires re-decoding images
 the splitting limit: identical images share coordinates, so a pile of
 exact duplicates remains one aggregate at any zoom — correct behavior,
 the badge counts the copies.
+
+### Region labels & density underlay
+
+`label` (and `build --label-column COL`) write two optional bundle
+artifacts, both derived only from coordinates + one metadata column, so
+they recompute in seconds without re-decoding:
+
+- `density.webp` — a blurred 2D histogram of point positions, colored as
+  a dark-navy→magenta→pink RGBA glow. The frontend stretches it behind
+  the markers as an underlay.
+- `labels.json` — one label per distinct value of the column, merged by
+  first keyword (so verbose multi-keyword topics sharing a lead term
+  collapse into one clean region name), placed at the spatial median of
+  its images, with a `level` assigned by magnitude (biggest themes →
+  level 0). The frontend reveals one more level per zoom step and
+  declutters by screen-space collision, so you see the "top features in
+  view" at every scale — high-level regions that break into finer ones.
+
+Both are optional: `serve` works on bundles without them (the toggles
+just don't appear), so this is additive, not a format bump. Labels
+describe the full collection's geography and are deliberately
+independent of the active filter — the map's regions don't move when you
+filter.
 
 `demo` writes a synthetic image collection (colored generative shapes in
 several visual families) + metadata CSV + coherent coords, then runs

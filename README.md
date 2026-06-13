@@ -98,15 +98,21 @@ python -m atlas build \
 - `--files list.txt` (paths relative to `--images`, one per line)
   restricts the build to an exact file list — useful for excluding
   known-corrupt images while keeping IDs aligned with your coords.
+- `--label-column COL` derives **hierarchical region labels** from a
+  metadata column (e.g. a topic/category) and always writes a **density
+  underlay** — big high-level region names when zoomed out that break
+  into finer ones as you zoom, over a heatmap of where images sit.
 - Other knobs: `--threshold` (images per tile before aggregating,
   default 8), `--max-zoom` (quadtree depth, default 10), `--cell`
   (sprite size, default 48 px), `--force`.
 
-To change the zoom depth or threshold of an already-built bundle
-(seconds — no image re-decoding):
+To change the zoom depth/threshold, or to (re)compute region labels and
+the density underlay, on an already-built bundle (seconds — no image
+re-decoding):
 
 ```bash
 python -m atlas retile /path/to/dataset --max-zoom 11 [--threshold 8]
+python -m atlas label  /path/to/dataset --column topic      # labels + density
 ```
 
 Note: clusters of *identical* images (exact duplicates share one
@@ -184,6 +190,7 @@ atlas/        Python package
   build.py      preprocessing pipeline (images -> dataset bundle)
   server.py     local HTTP server: filtering, tile summarization, selection
   retile.py     change zoom depth / threshold without rebuilding
+  labels.py     region labels + density underlay (build step & `atlas label`)
   summarize.py  representative-selection heuristic (shared build/serve)
   demo.py       synthetic dataset generator
   frontend/     index.html / app.js / style.css (+ shim.js) — no build step

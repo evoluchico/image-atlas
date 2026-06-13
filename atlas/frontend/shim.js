@@ -188,6 +188,7 @@
     };
     try {
       if (u.pathname === "/api/manifest") return json(D.manifest);
+      if (u.pathname === "/api/labels") return json({ labels: D.labels || [] });
 
       if (u.pathname === "/api/filter") {
         const where = (JSON.parse(opts?.body || "{}").where || "").trim();

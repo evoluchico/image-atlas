@@ -13,6 +13,13 @@ const GRID_TARGET_PX = 112;   // fixed on-screen cell size; sets the aggregation
 // grid: making thumbnails bigger shows them bigger without re-aggregating
 let markerPx = +(localStorage.getItem("atlasMarkerPx") || 42);
 
+// region labels + density underlay
+let labels = [];                 // [{text, x, y, count, level}], importance-sorted
+let maxDataLevel = 0;
+let densityImg = null;
+let showLabels = localStorage.getItem("atlasLabels") !== "0";
+let showDensity = localStorage.getItem("atlasDensity") !== "0";
+
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const hud = document.getElementById("hud");
@@ -186,6 +193,44 @@ function fmtCount(n) {
        : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+// How many label levels to reveal at the current zoom: coarsest (level 0)
+// always, one more level per zoom step in. Finer themes emerge as you zoom —
+// the "breaks down into sub-regions" behaviour, from one flat label set.
+function labelLevelCap() {
+  const span = Math.log2(uppFit / view.upp);   // ~0 fully out, grows zooming in
+  return Math.max(0, Math.min(maxDataLevel, Math.floor(span) - 1));
+}
+
+function renderLabels() {
+  const { w, h } = cssSize();
+  const cap = labelLevelCap();
+  const placed = [];   // screen bboxes of already-drawn labels
+  let drawn = 0;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const lab of labels) {            // labels are pre-sorted by importance
+    if (lab.level > cap || drawn >= 40) continue;
+    const [sx, sy] = worldToScreen(lab.x, lab.y);
+    if (sx < -50 || sx > w + 50 || sy < -30 || sy > h + 30) continue;
+    const fontPx = Math.max(11, Math.min(34, 13 + 6 * Math.log10(lab.count) - 3 * lab.level));
+    ctx.font = `600 ${fontPx}px system-ui, sans-serif`;
+    const tw = ctx.measureText(lab.text).width;
+    const box = { x: sx - tw / 2, y: sy - fontPx / 2, w: tw, h: fontPx };
+    const pad = 6;
+    if (placed.some((p) => box.x < p.x + p.w + pad && box.x + box.w + pad > p.x &&
+                            box.y < p.y + p.h + pad && box.y + box.h + pad > p.y)) continue;
+    placed.push(box);
+    drawn++;
+    const alpha = lab.level === 0 ? 1 : 0.82;
+    ctx.lineWidth = Math.max(3, fontPx / 5);
+    ctx.strokeStyle = `rgba(8, 9, 13, ${alpha})`;
+    ctx.lineJoin = "round";
+    ctx.strokeText(lab.text, sx, sy);    // dark halo for legibility over thumbnails
+    ctx.fillStyle = `rgba(238, 241, 248, ${alpha})`;
+    ctx.fillText(lab.text, sx, sy);
+  }
+}
+
 function render() {
   const { w, h } = cssSize();
   const dpr = window.devicePixelRatio || 1;
@@ -199,6 +244,15 @@ function render() {
   // world border
   const [bx0, by0] = worldToScreen(0, 0);
   const [bx1, by1] = worldToScreen(1, 1);
+
+  // density underlay (backmost)
+  if (showDensity && densityImg) {
+    ctx.globalAlpha = 0.85;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(densityImg, bx0, by0, bx1 - bx0, by1 - by0);
+    ctx.globalAlpha = 1;
+  }
+
   ctx.strokeStyle = "#2a2e38";
   ctx.lineWidth = 1;
   ctx.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
@@ -231,6 +285,7 @@ function render() {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+  if (showLabels && labels.length) renderLabels();
   hud.textContent =
     `z${scene.z} · ${scene.aggregates.length} aggregates · ${scene.items.length} items`;
   renderContents();   // repaint the side-panel grid as sprite strips arrive
@@ -551,6 +606,35 @@ filterInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); applyFilter(); }
 });
 
+/* ----------------------------------------------------- labels & density UI */
+
+function wireToggle(id, rowId, get, set) {
+  const cb = document.getElementById(id);
+  cb.checked = get();
+  cb.addEventListener("change", () => { set(cb.checked); requestRender(); });
+  document.getElementById(rowId).classList.remove("hidden");
+}
+
+async function loadLabelsAndDensity() {
+  try {
+    const data = await (await fetch("/api/labels")).json();
+    labels = data.labels || [];
+  } catch (e) { labels = []; }
+  if (labels.length) {
+    maxDataLevel = labels.reduce((m, l) => Math.max(m, l.level), 0);
+    wireToggle("labels-toggle", "labels-toggle-row", () => showLabels,
+      (v) => { showLabels = v; localStorage.setItem("atlasLabels", v ? "1" : "0"); });
+  }
+  if (manifest.has_density) {
+    const img = new Image();
+    img.onload = () => { densityImg = img; requestRender(); };
+    img.src = "density.webp";   // relative: works at "/" and under a subpath
+    wireToggle("density-toggle", "density-toggle-row", () => showDensity,
+      (v) => { showDensity = v; localStorage.setItem("atlasDensity", v ? "1" : "0"); });
+  }
+  requestRender();
+}
+
 /* ------------------------------------------------------------------ init */
 
 async function init() {
@@ -562,6 +646,7 @@ async function init() {
   const { w, h } = cssSize();
   uppFit = 1.1 / Math.min(w, h);
   view = { cx: 0.5, cy: 0.5, upp: uppFit };
+  loadLabelsAndDensity();
   requestRender();
   scheduleFetch(true);
 }

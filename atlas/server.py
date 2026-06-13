@@ -420,6 +420,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(FRONTEND_DIR / route.lstrip("/"))
             if route == "/api/manifest":
                 return self._json(self.ds.manifest)
+            if route == "/api/labels":
+                p = self.ds.root / "labels.json"
+                if p.exists():
+                    return self._file(p)
+                return self._json({"labels": []})
+            if route == "/density.webp":
+                p = self.ds.root / "density.webp"
+                return self._file(p, immutable=True) if p.exists() else self._error(404, "no density")
             if route == "/api/viewport":
                 q = parse_qs(url.query)
 

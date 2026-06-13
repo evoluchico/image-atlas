@@ -111,6 +111,7 @@ def run(args) -> None:
             preview_max=512,
             max_zoom=8,
             threshold=8,
+            label_column="family",
             force=True,
         )
     )

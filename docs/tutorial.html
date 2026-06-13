@@ -36,7 +36,8 @@
         <a href="#retile">retiling</a> ·
         <a href="#bundle">the bundle</a></li>
     <li><a href="#looking">4. What you are looking at</a>
-      — <a href="#stacks">how image stacks are produced</a></li>
+      — <a href="#stacks">how image stacks are produced</a> ·
+        <a href="#labels">region labels &amp; density</a></li>
     <li><a href="#frontend">5. Frontend: exploring the map</a></li>
     <li><a href="#remote">6. Remote &amp; headless machines</a></li>
     <li><a href="#faq">7. FAQ</a></li>
@@ -180,6 +181,9 @@ with open("coords.csv", "w", newline="") as f:
   <tr><td><code>--max-zoom Z</code></td><td>10</td>
       <td>depth of the aggregation grid (2<sup>Z</sup>×2<sup>Z</sup>
           cells at the deepest level)</td></tr>
+  <tr><td><code>--label-column COL</code></td><td>none</td>
+      <td>derive hierarchical region labels from this metadata column
+          (a density underlay is always written; see §4.2)</td></tr>
   <tr><td><code>--cell PX</code></td><td>48</td>
       <td>size of the small map thumbnails</td></tr>
   <tr><td><code>--preview-max PX</code></td><td>512</td>
@@ -191,12 +195,18 @@ with open("coords.csv", "w", newline="") as f:
           (<code>run</code> / <code>build</code> respectively)</td></tr>
 </table>
 
-<h3 id="retile">3.5 Retiling (change settings without rebuilding)</h3>
+<h3 id="retile">3.5 Retiling &amp; labelling (change settings without rebuilding)</h3>
 <p>
-  The aggregation depth and threshold derive purely from the stored
-  coordinates, so changing them takes seconds, not a rebuild:
+  Aggregation depth/threshold and the region labels all derive purely
+  from the stored coordinates (and one metadata column), so changing
+  them takes seconds, not a rebuild:
 </p>
-<pre><code>atlas retile DATASET --max-zoom 11 --threshold 12</code></pre>
+<pre><code>atlas retile DATASET --max-zoom 11 --threshold 12
+atlas label  DATASET --column topic       # (re)compute labels + density underlay</code></pre>
+<p class="muted small">
+  Use <code>atlas label</code> to add or re-derive region labels on a
+  bundle you already built, or to try a different label column.
+</p>
 
 <h3 id="bundle">3.6 What the build produces</h3>
 <p>
@@ -283,6 +293,48 @@ with open("coords.csv", "w", newline="") as f:
   <a href="how-it-works.html">How it works</a> for the full argument.
 </blockquote>
 
+<h3 id="labels">4.2 Region labels &amp; the density underlay</h3>
+<p>
+  If the dataset was built with a <code>--label-column</code> (or you ran
+  <code>atlas label</code>), the map also carries two things that make
+  its <em>global</em> structure legible — what each area is "about" —
+  rather than just what's in each cell:
+</p>
+<ul>
+  <li><strong>The density underlay</strong> is a soft magenta heatmap
+      behind the thumbnails showing where images are concentrated. Bright
+      regions are dense; dark areas are sparse. It gives you the overall
+      shape of the collection at a glance.</li>
+  <li><strong>Region labels</strong> are text names floating over the
+      map — the dominant theme of each area, drawn from your chosen
+      column. They are <em>hierarchical by zoom</em>: zoomed all the way
+      out you see only a few big, high-level region names; each time you
+      zoom in, those areas reveal finer sub-region labels nested inside
+      them. This is the same idea as a world map showing continents, then
+      countries, then cities as you zoom.</li>
+</ul>
+<p>How the labels are built and chosen, exactly:</p>
+<ol>
+  <li>Each distinct value of the label column becomes a candidate. Values
+      sharing a first keyword are merged into one clean region name (so
+      "news brasil, cnn brasil" and "news brasil, globo" both become
+      <em>news brasil</em>).</li>
+  <li>Each region is placed at the <em>spatial median</em> of its images
+      — a real, central spot, not empty space.</li>
+  <li>Each region gets a <em>level</em> by how many images it holds: the
+      largest themes are level 0 (shown when zoomed out), smaller ones
+      get higher levels (revealed as you zoom). Bigger themes are also
+      drawn in larger text.</li>
+  <li>At any moment the viewer shows the most important labels that fit
+      without overlapping — pan or zoom and the set updates, so you
+      always see the "top features in view".</li>
+</ol>
+<p>
+  Labels describe the <em>fixed geography</em> of the whole collection,
+  so they stay put when you filter (the regions don't move). Toggle them
+  and the density underlay on/off in the side panel.
+</p>
+
 <h2 id="frontend">5. Frontend: exploring the map</h2>
 <table>
   <tr><th>action</th><th>what happens</th></tr>
@@ -317,6 +369,10 @@ with open("coords.csv", "w", newline="") as f:
           changing the aggregation grid — purely a display preference;
           use the mouse wheel to change how finely the map is
           aggregated</td></tr>
+  <tr><td><strong>Region labels / Density toggles</strong></td>
+      <td>show or hide the hierarchical region labels and the density
+          underlay (§4.2); only present if the dataset was built with a
+          label column</td></tr>
   <tr><td><strong><kbd>Shift</kbd> + drag</strong></td>
       <td>lasso-select a free-form region. The selection count appears
           in the panel; the map dims to the selection; <em>Export

@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from . import FORMAT_VERSION, summarize
+from . import FORMAT_VERSION, labels, summarize
 
 Image.MAX_IMAGE_PIXELS = None  # local, user-owned data
 
@@ -423,6 +423,9 @@ def run(args) -> None:
         user_cols, user_rows = load_metadata(Path(args.metadata), rels)
     build_db(out / "metadata.sqlite", rels, sizes, user_cols, user_rows)
 
+    # --- region labels + density underlay --------------------------------
+    label_fields = labels.generate(out, args.label_column)
+
     # --- manifest last: marks the bundle complete -------------------------
     manifest = {
         "format_version": FORMAT_VERSION,
@@ -434,6 +437,7 @@ def run(args) -> None:
         "preview_max_side": args.preview_max,
         "coords_source": coords_source,
         "metadata_columns": [{"name": i, "type": t} for i, t in user_cols],
+        **label_fields,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -455,6 +459,8 @@ def add_build_options(p) -> None:
     p.add_argument("--preview-max", type=int, default=512, help="detail preview max side")
     p.add_argument("--max-zoom", type=int, default=10, choices=range(1, 13))
     p.add_argument("--threshold", type=int, default=8, help="max items per tile before aggregating")
+    p.add_argument("--label-column", help="metadata column to derive region labels from "
+                                          "(a density underlay is always written)")
 
 
 def add_parser(sub) -> None:

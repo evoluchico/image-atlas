@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 import sqlite3
 import sys
@@ -45,7 +46,7 @@ def build_fixture(root: Path) -> Path:
     build.run(SimpleNamespace(
         images=str(images), files=None, out=str(out), metadata=str(root / "meta.csv"),
         coords=str(root / "coords.csv"), name="fixture", workers=1, cell=48,
-        preview_max=512, max_zoom=6, threshold=4, force=False,
+        preview_max=512, max_zoom=6, threshold=4, label_column="color", force=False,
     ))
     return out
 
@@ -109,6 +110,18 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(
             {c["name"] for c in m["metadata_columns"]}, {"color", "idx"}
         )
+
+    def test_labels_and_density(self):
+        m = self.ds.manifest
+        self.assertTrue(m.get("has_density"))
+        self.assertEqual(m.get("labels_column"), "color")
+        self.assertTrue((self.ds.root / "density.webp").is_file())
+        data = json.loads((self.ds.root / "labels.json").read_text())
+        names = {lab["text"] for lab in data["labels"]}
+        self.assertEqual(names, {name for name, _ in COLORS})   # one per color
+        for lab in data["labels"]:
+            self.assertTrue(0 <= lab["x"] <= 1 and 0 <= lab["y"] <= 1)
+            self.assertGreaterEqual(lab["level"], 0)
 
     def test_broken_bundle_rejected(self):
         broken = self.tmp / "broken"

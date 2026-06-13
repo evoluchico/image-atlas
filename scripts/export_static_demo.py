@@ -57,7 +57,13 @@ def main() -> None:
         "columns": columns,
         "rows": rows,
     }
+    labels_path = ds.root / "labels.json"
+    if labels_path.exists():
+        data["labels"] = json.loads(labels_path.read_text(encoding="utf-8"))["labels"]
     (out / "data.json").write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+
+    if (ds.root / "density.webp").exists():
+        shutil.copy(ds.root / "density.webp", out / "density.webp")
 
     # --- sprite sheet ---------------------------------------------------
     c = ds.cell

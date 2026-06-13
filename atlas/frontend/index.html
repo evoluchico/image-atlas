@@ -30,6 +30,12 @@
   <section id="display-box">
     <label for="size-slider">Thumbnail size <span id="size-val"></span></label>
     <input type="range" id="size-slider" min="24" max="96" step="2">
+    <div class="toggles">
+      <label class="toggle hidden" id="labels-toggle-row">
+        <input type="checkbox" id="labels-toggle" checked> Region labels</label>
+      <label class="toggle hidden" id="density-toggle-row">
+        <input type="checkbox" id="density-toggle" checked> Density underlay</label>
+    </div>
   </section>
   <section id="selection" class="hidden">
     <div><strong id="sel-count"></strong> <span class="muted">selected by lasso</span></div>
