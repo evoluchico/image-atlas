@@ -7,11 +7,11 @@
 "use strict";
 
 const FETCH_DEBOUNCE_MS = 80;
+const GRID_TARGET_PX = 112;   // fixed on-screen cell size; sets the aggregation grid
 
-// marker size is user-adjustable; the tile-level rule scales with it so
-// bigger thumbnails automatically aggregate at a coarser grid
+// thumbnail display size — user-adjustable, and deliberately INDEPENDENT of the
+// grid: making thumbnails bigger shows them bigger without re-aggregating
 let markerPx = +(localStorage.getItem("atlasMarkerPx") || 42);
-function tileTargetPx() { return markerPx * 8 / 3; }
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -47,7 +47,7 @@ function screenToWorld(sx, sy) {
   return [view.cx + (sx - w / 2) * view.upp, view.cy + (sy - h / 2) * view.upp];
 }
 function currentZ() {
-  const z = Math.round(Math.log2(1 / (tileTargetPx() * view.upp)));
+  const z = Math.round(Math.log2(1 / (GRID_TARGET_PX * view.upp)));
   return Math.max(manifest.zoom.min, Math.min(manifest.zoom.max, z));
 }
 
@@ -454,8 +454,7 @@ sizeSlider.addEventListener("input", () => {
   markerPx = +sizeSlider.value;
   sizeVal.textContent = `${markerPx}px`;
   localStorage.setItem("atlasMarkerPx", markerPx);
-  requestRender();
-  scheduleFetch();   // tile level depends on marker size
+  requestRender();   // display size only; the grid is fixed, so no refetch
 });
 
 /* ------------------------------------------------------------- selection */

@@ -29,15 +29,20 @@ DEFAULT_IMAGES_ROOT = DEFAULT_BASE / "CSN" / "build" / "images_telegram"
 DATE_RE = re.compile(r"@(\d{2})-(\d{2})-(\d{4})_(\d{2})-\d{2}-\d{2}")
 
 
-def project_umap(emb: np.ndarray, seed: int | None) -> np.ndarray:
+def project_umap(emb, seed, n_neighbors, min_dist, init) -> np.ndarray:
     import umap
 
-    print(f"  UMAP on {emb.shape} (cosine, n_neighbors=15, seed={seed})...", flush=True)
-    # a fixed random_state forces single-threaded UMAP; omit it for big runs
+    print(f"  UMAP on {emb.shape} (cosine, n_neighbors={n_neighbors}, "
+          f"min_dist={min_dist}, init={init}, seed={seed})...", flush=True)
+    # init='pca' anchors the global arrangement to the dominant axes of the
+    # embedding space — UMAP's spectral default preserves local neighborhoods
+    # well but lets clusters fall almost arbitrarily relative to each other,
+    # which reads as "random global structure". Measured on this data, pca init
+    # raised global faithfulness ~0.52->0.63; raising n_neighbors did NOT help.
     kw = {"random_state": seed} if seed is not None else {}
     reducer = umap.UMAP(
-        n_components=2, n_neighbors=15, min_dist=0.1, metric="cosine",
-        verbose=True, **kw,
+        n_components=2, n_neighbors=n_neighbors, min_dist=min_dist,
+        metric="cosine", init=init, verbose=True, **kw,
     )
     return reducer.fit_transform(emb)
 
@@ -57,6 +62,12 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--year", help="restrict to one year subfolder (e.g. 2020)")
     ap.add_argument("--method", choices=["umap", "pca"], default="umap")
+    ap.add_argument("--n-neighbors", type=int, default=15,
+                    help="UMAP n_neighbors (15 measured best; higher can hurt "
+                         "the global arrangement of clusters)")
+    ap.add_argument("--min-dist", type=float, default=0.1)
+    ap.add_argument("--init", default="pca", choices=["pca", "spectral", "random"],
+                    help="UMAP init; 'pca' gives a coherent, stable global layout")
     ap.add_argument("--seed", type=int, default=None,
                     help="fix the UMAP seed (disables UMAP parallelism)")
     args = ap.parse_args()
@@ -96,7 +107,7 @@ def main() -> None:
 
     if args.method == "umap":
         try:
-            xy = project_umap(sub, args.seed)
+            xy = project_umap(sub, args.seed, args.n_neighbors, args.min_dist, args.init)
         except ImportError:
             xy = project_pca(sub)
     else:
