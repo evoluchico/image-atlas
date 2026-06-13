@@ -71,7 +71,36 @@ class Dataset:
 
     def __init__(self, root: Path):
         self.root = root.resolve()
+        self._maps = []   # open memory-maps, tracked so close() can release them
+        try:
+            self._open()
+        except Exception:
+            self.close()   # release any partial handles so the dir can be deleted
+            raise
 
+    def _track(self, arr):
+        self._maps.append(arr)
+        return arr
+
+    def close(self) -> None:
+        """Release all memory-maps. Required on Windows before the bundle
+        directory can be moved or deleted (an open map locks the file)."""
+        for arr in self._maps:
+            mm = getattr(arr, "_mmap", None)
+            if mm is not None:
+                try:
+                    mm.close()
+                except (ValueError, OSError):
+                    pass
+        self._maps = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def _open(self) -> None:
         def need(rel: str) -> Path:
             p = self.root / rel
             if not p.exists():
@@ -92,12 +121,12 @@ class Dataset:
         self.zmin = int(self.manifest["zoom"]["min"])
         self.zmax = int(self.manifest["zoom"]["max"])
 
-        self.xy = np.load(need("points/xy.npy"), mmap_mode="r")
-        self.rep = np.load(need("points/rep.npy"), mmap_mode="r")
+        self.xy = self._track(np.load(need("points/xy.npy"), mmap_mode="r"))
+        self.rep = self._track(np.load(need("points/rep.npy"), mmap_mode="r"))
         self.tiles = {}
         for z in range(self.zmin, self.zmax + 1):
             self.tiles[z] = (
-                np.load(need(f"points/z{z}_order.npy"), mmap_mode="r"),
+                self._track(np.load(need(f"points/z{z}_order.npy"), mmap_mode="r")),
                 np.load(need(f"points/z{z}_keys.npy")),
                 np.load(need(f"points/z{z}_starts.npy")),
                 np.load(need(f"points/z{z}_rep.npy")),
@@ -116,9 +145,9 @@ class Dataset:
             raise DatasetError(
                 f"sprites.bin is {sprites_path.stat().st_size} bytes, expected {want_size}"
             )
-        self.sprites = np.memmap(
+        self.sprites = self._track(np.memmap(
             sprites_path, dtype=np.uint8, mode="r", shape=(self.n, self.cell, self.cell, 3)
-        )
+        ))
         self._strips: OrderedDict[str, bytes] = OrderedDict()
 
         self.db_path = need("metadata.sqlite")

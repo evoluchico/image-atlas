@@ -101,6 +101,7 @@ class TestEndToEnd(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.ds.close()   # release memory-maps so Windows can delete the dir
         shutil.rmtree(cls.tmp)
 
     def test_manifest_and_validation(self):
@@ -208,13 +209,13 @@ class TestEndToEnd(unittest.TestCase):
         copy = self.tmp / "retiled"
         shutil.copytree(self.ds.root, copy)
         retile.run(SimpleNamespace(dataset=str(copy), max_zoom=3, threshold=2))
-        ds2 = Dataset(copy)
-        self.assertEqual(ds2.zmax, 3)
-        self.assertEqual(ds2.threshold, 2)
-        self.assertFalse((copy / "points" / "z4_order.npy").exists())  # stale levels gone
-        r = ds2.viewport(3, 0, 0, 1, 1, "all")
-        total = sum(a["count"] for a in r["aggregates"]) + len(r["items"])
-        self.assertEqual(total, N_IMAGES)
+        with Dataset(copy) as ds2:
+            self.assertEqual(ds2.zmax, 3)
+            self.assertEqual(ds2.threshold, 2)
+            self.assertFalse((copy / "points" / "z4_order.npy").exists())  # stale levels gone
+            r = ds2.viewport(3, 0, 0, 1, 1, "all")
+            total = sum(a["count"] for a in r["aggregates"]) + len(r["items"])
+            self.assertEqual(total, N_IMAGES)
         shutil.rmtree(copy)
 
     def test_image_info(self):
