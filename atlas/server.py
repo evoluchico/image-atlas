@@ -167,6 +167,15 @@ class Dataset:
         self._filters: OrderedDict[str, tuple] = OrderedDict()  # token -> (mask, count, where)
         self._lock = threading.Lock()
 
+        # optional search: CLIP text->image and/or OCR full-text
+        self.search_cfg = self.manifest.get("search")
+        self._searcher = None
+        with self._connect() as con:
+            self.has_ocr = bool(con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ocr'"
+            ).fetchone())
+        self.has_search = bool(self.search_cfg) or self.has_ocr
+
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
         con.execute("PRAGMA query_only = ON")
@@ -270,6 +279,66 @@ class Dataset:
                 return token, hit[1]
         return self._store_ids(
             token, self._run_ids(f"SELECT id FROM images WHERE {where}", params), where)
+
+    # --------------------------------------------------------- search
+
+    def _ocr_ids(self, query: str, limit: int) -> list[int]:
+        # quote each token so FTS5 treats them literally (avoids syntax errors)
+        terms = " ".join(f'"{t}"' for t in query.split() if t)
+        if not terms:
+            return []
+        con = self._connect()
+        try:
+            return [r[0] for r in con.execute(
+                "SELECT rowid FROM ocr WHERE ocr MATCH ? ORDER BY rank LIMIT ?",
+                (terms, limit),
+            )]
+        except sqlite3.Error:
+            return []
+        finally:
+            con.close()
+
+    def search(self, query: str, base_token: str = ALL_TOKEN, k: int = 1000) -> tuple[str, int]:
+        """Unified text search: fuse CLIP text->image ranking and OCR full-text
+        matches with Reciprocal Rank Fusion, return the top k as a filter token.
+        Restricted to base_token's set, so search composes with the filters."""
+        query = (query or "").strip()
+        if not query:
+            return base_token, (self.n if base_token in ("", ALL_TOKEN)
+                                else int(self.get_mask(base_token).sum()))
+        base = self.get_mask(base_token)   # None = all; may raise KeyError
+        token = "q" + hashlib.sha1((query + "|" + base_token).encode()).hexdigest()[:11]
+        with self._lock:
+            hit = self._filters.get(token)
+            if hit:
+                self._filters.move_to_end(token)
+                return token, hit[1]
+
+        keep = (lambda i: True) if base is None else (lambda i: bool(base[i]))
+        pool = max(k * 4, 2000)
+        scores: dict[int, float] = {}
+        if self.search_cfg:
+            if self._searcher is None:
+                from .search import TextSearcher
+                self._searcher = TextSearcher(self.root, self.search_cfg["model"])
+            ranked, _ = self._searcher.rank(query)
+            rank = 0
+            for i in ranked.tolist():
+                if keep(i):
+                    scores[i] = scores.get(i, 0.0) + 1.0 / (60 + rank)
+                    rank += 1
+                    if rank >= pool:
+                        break
+        if self.has_ocr:
+            rank = 0
+            for i in self._ocr_ids(query, pool * 3):
+                if keep(i):
+                    scores[i] = scores.get(i, 0.0) + 1.0 / (60 + rank)
+                    rank += 1
+        if not scores:
+            return self._store_ids(token, np.empty(0, np.int64), f"search:{query}")
+        top = sorted(scores, key=scores.get, reverse=True)[:k]
+        return self._store_ids(token, np.array(top, np.int64), f"search:{query}")
 
     def make_selection(self, polygon, base_token: str) -> tuple[str, int]:
         poly = np.asarray(polygon, dtype=np.float64)
@@ -526,7 +595,17 @@ class Handler(BaseHTTPRequestHandler):
             if route in ("/app.js", "/style.css"):
                 return self._file(FRONTEND_DIR / route.lstrip("/"))
             if route == "/api/manifest":
-                return self._json(self.ds.manifest)
+                return self._json({**self.ds.manifest, "has_search": self.ds.has_search})
+            if route == "/api/search":
+                q = parse_qs(url.query)
+                try:
+                    token, count = self.ds.search(
+                        q.get("q", [""])[0], q.get("base", [ALL_TOKEN])[0])
+                except KeyError:
+                    return self._error(410, "unknown base token; re-apply the filter")
+                except Exception as e:
+                    return self._error(500, f"search failed: {e}")
+                return self._json({"token": token, "count": count})
             if route == "/api/labels":
                 p = self.ds.root / "labels.json"
                 if p.exists():

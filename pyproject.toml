@@ -12,6 +12,12 @@ license = { text = "MIT" }
 authors = [{ name = "Chico Camargo", email = "chico.camargo@gmail.com" }]
 dependencies = ["numpy", "Pillow"]
 
+# Optional, heavy extras. The core stays numpy+Pillow; these add semantic
+# search (CLIP text->image) and the OCR build step respectively.
+[project.optional-dependencies]
+search = ["sentence-transformers"]
+ocr = ["paddleocr", "paddlepaddle"]
+
 [project.urls]
 Homepage = "https://evoluchico.github.io/image-atlas/"
 Repository = "https://github.com/evoluchico/image-atlas"

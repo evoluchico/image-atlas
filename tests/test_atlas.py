@@ -228,6 +228,29 @@ class TestEndToEnd(unittest.TestCase):
         empty = self.ds.tile_members(6, 1, 1, token, 0, 10)  # no fixture point here
         self.assertEqual(empty, {"total": 0, "ids": []})
 
+    def test_ocr_search(self):
+        # add an OCR FTS table to a copy and search it (CLIP-free serve path)
+        copy = self.tmp / "ocr"
+        shutil.copytree(self.ds.root, copy)
+        con = sqlite3.connect(copy / "metadata.sqlite")
+        con.execute("CREATE VIRTUAL TABLE ocr USING fts5(text)")
+        con.execute("INSERT INTO ocr (rowid, text) VALUES (?, ?)", (5, "hello vaccine world"))
+        con.execute("INSERT INTO ocr (rowid, text) VALUES (?, ?)", (9, "vaccine news"))
+        con.execute("INSERT INTO ocr (rowid, text) VALUES (?, ?)", (12, "unrelated text"))
+        con.commit(); con.close()
+        with Dataset(copy) as ds:
+            self.assertTrue(ds.has_ocr and ds.has_search)
+            self.assertEqual(sorted(ds._ocr_ids("vaccine", 10)), [5, 9])
+            token, count = ds.search("vaccine")
+            self.assertEqual(count, 2)
+            mask = ds.get_mask(token)
+            self.assertTrue(mask[5] and mask[9] and not mask[12])
+            # composes with a base filter
+            base, _ = ds.make_filter_structured([{"col": "idx", "min": 0, "max": 7}])
+            _, c2 = ds.search("vaccine", base)
+            self.assertEqual(c2, 1)   # only id 5 is within idx<=7
+        shutil.rmtree(copy)
+
     def test_retile(self):
         from atlas import retile
         copy = self.tmp / "retiled"

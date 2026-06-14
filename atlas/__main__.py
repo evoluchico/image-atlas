@@ -1,7 +1,7 @@
 import argparse
 import multiprocessing
 
-from . import build, demo, labels, retile, run, server
+from . import build, demo, labels, ocr, retile, run, search, server
 
 
 def main() -> None:
@@ -15,6 +15,8 @@ def main() -> None:
     server.add_parser(sub)
     retile.add_parser(sub)
     labels.add_parser(sub)
+    search.add_parser(sub)
+    ocr.add_parser(sub)
     demo.add_parser(sub)
     args = p.parse_args()
     args.func(args)
