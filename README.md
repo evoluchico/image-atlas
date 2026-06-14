@@ -119,6 +119,35 @@ Note: clusters of *identical* images (exact duplicates share one
 embedding point) never split spatially no matter how deep you zoom —
 the count badge is telling you the truth about a pile of copies.
 
+### Semantic & text search (optional)
+
+A single search box can find images by **content**, not just metadata —
+fused from two retrievers via Reciprocal Rank Fusion:
+
+- **CLIP text→image** — type what you want to see ("protest at night",
+  works in many languages); matched against image embeddings.
+- **OCR text** — the words printed *in* the images (great for
+  meme/screenshot-heavy collections), via SQLite full-text search.
+
+Both are optional and need heavier deps (kept out of the core):
+
+```bash
+pip install "image-atlas[search]"     # CLIP text encoder (sentence-transformers)
+pip install "image-atlas[ocr]"        # PaddleOCR for the OCR build step
+
+# 1) store image embeddings for CLIP search (reuses precomputed vectors)
+python -m atlas embed DATASET --embeddings emb.npy --paths paths.json \
+       --images-root /path/to/images --model clip-ViT-B-32-multilingual-v1
+
+# 2) extract in-image text once (slow; GPU strongly recommended)
+python -m atlas ocr DATASET --lang en        # or pt, ch, …  (resumable)
+```
+
+The search box appears automatically when a bundle has either. Searches
+compose with the filters (search *within* the current filtered set), and
+the result drives the map like any filter. CLIP search must be served
+from an env with the `[search]` extra installed.
+
 Throughput is roughly limited by image decoding: ~400k images take
 ~20 min with 24 workers on a fast machine.
 

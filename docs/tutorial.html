@@ -216,10 +216,45 @@ atlas label  DATASET --column topic       # (re)compute labels + density underla
 </p>
 <pre><code>dataset/
   manifest.json     dataset constants (count, zoom depth, columns, ...)
-  metadata.sqlite   one row per image; what SQL filters run against
+  metadata.sqlite   one row per image; filters + OCR full-text index
   sprites.bin       all map thumbnails, raw, O(1) access by image id
   points/           coordinates, scores, and per-zoom tile indexes
-  previews/         512px previews, fetched only on hover/click</code></pre>
+  previews/         512px previews, fetched only on hover/click
+  search/           image embeddings for CLIP search (optional)</code></pre>
+
+<h3 id="search-build">3.7 Search by content (optional)</h3>
+<p>
+  Beyond metadata filtering, the tool can search by what is <em>in</em>
+  the images. One search box fuses two retrievers (Reciprocal Rank
+  Fusion), each optional:
+</p>
+<ul>
+  <li><strong>CLIP text→image</strong>: type a description and get images
+      that look like it. It reuses the same embeddings that placed the
+      images on the map, so there's nothing new to compute — just store
+      them in the bundle. With a multilingual CLIP model it works across
+      languages (e.g. Portuguese and English).</li>
+  <li><strong>OCR text</strong>: the words printed inside the images —
+      invaluable for meme/screenshot collections, where CLIP can't read
+      text well. Run once at build time; searched instantly via SQLite
+      full-text at runtime.</li>
+</ul>
+<pre><code>pip install "image-atlas[search]"   # CLIP (sentence-transformers)
+pip install "image-atlas[ocr]"      # PaddleOCR
+
+# store embeddings for CLIP search (point at your precomputed vectors)
+atlas embed DATASET --embeddings emb.npy --paths paths.json \
+      --images-root /path/to/images --model clip-ViT-B-32-multilingual-v1
+
+# extract in-image text once — slow, GPU strongly recommended, resumable
+atlas ocr DATASET --lang en</code></pre>
+<p class="muted small">
+  The search box appears automatically when a bundle has either. CLIP
+  search must be <em>served</em> from an env with the <code>[search]</code>
+  extra (it loads the text encoder); OCR needs no model at serve time.
+  Searches compose with the filters — you search <em>within</em> the
+  current filtered set.
+</p>
 
 <h2 id="looking">4. What you are looking at</h2>
 <p>
@@ -359,6 +394,11 @@ atlas label  DATASET --column topic       # (re)compute labels + density underla
           with a "Show more" button. Click any grid cell to inspect
           that image. This is how you look inside piles that are too
           dense to split spatially (e.g. near-duplicates)</td></tr>
+  <tr><td><strong>Search box</strong></td>
+      <td>(if the dataset supports it) type what you want to see — content
+          (CLIP) and in-image text (OCR) are searched together and the
+          best matches drive the map. Composes with the filters: it
+          searches within whatever is currently filtered</td></tr>
   <tr><td><strong>Filters panel</strong></td>
       <td>one control per metadata column, generated automatically: a
           multi-select for categories, a min–max pair for numbers. Pick

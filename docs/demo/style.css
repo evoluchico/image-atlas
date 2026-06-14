@@ -42,6 +42,13 @@ body { display: flex; }
 }
 #filter-box textarea:focus { outline: 1px solid var(--accent); }
 .filter-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+#search-box label, #filter-box > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+#search-input {
+  width: 100%; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px;
+  font: 14px system-ui, sans-serif;
+}
+#search-input:focus { outline: 1px solid var(--accent); }
 #filter-controls { display: flex; flex-direction: column; gap: 10px; }
 .fc { display: flex; flex-direction: column; gap: 3px; }
 .fc > .fc-name { font-size: 12px; color: var(--muted); text-transform: capitalize; }

@@ -28,7 +28,8 @@ const hud = document.getElementById("hud");
 let manifest = null;
 let view = { cx: 0.5, cy: 0.5, upp: 0.001 }; // world units per CSS pixel
 let uppFit = 0.001;
-let filterToken = "all";         // token of the SQL filter
+let filterToken = "all";         // base token from the structured/SQL filters
+let searchToken = null;          // token from a text search (layered on the filter)
 let selection = null;            // {token, count} from a lasso, or null
 let lasso = null;                // screen-space points while drawing a lasso
 let scene = { z: 0, aggregates: [], items: [] };
@@ -36,7 +37,7 @@ let markers = [];                // hit-test rects, topmost last
 let hoverId = null, pinnedId = null;
 
 function activeToken() {
-  return selection ? selection.token : filterToken;
+  return selection ? selection.token : (searchToken || filterToken);
 }
 let fetchSeq = 0, fetchTimer = null;
 let renderQueued = false;
@@ -550,7 +551,7 @@ async function finishLasso() {
     const res = await fetch("/api/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ polygon, base_token: filterToken }),
+      body: JSON.stringify({ polygon, base_token: searchToken || filterToken }),
     });
     if (!res.ok) return;
     selection = await res.json();
@@ -610,6 +611,7 @@ async function postFilter(body) {
     }
     filterToken = data.token;
     selection = null;            // a new filter supersedes any lasso
+    if (searchToken) reRunSearch();   // re-apply the search on the new filter base
     closeContents();
     updateSelectionUI();
     filterStatus.textContent =
@@ -694,9 +696,60 @@ async function loadColumns() {
   } catch (e) { /* leave empty */ }
 }
 
+/* ---------------------------------------------------------------- search */
+
+const searchInput = document.getElementById("search-input");
+const searchStatus = document.getElementById("search-status");
+
+async function runSearch() {
+  const q = searchInput.value.trim();
+  if (!q) { clearSearch(); return; }
+  searchStatus.textContent = "searching…";
+  try {
+    const res = await fetch(
+      `/api/search?q=${encodeURIComponent(q)}&base=${filterToken}`);
+    const data = await res.json();
+    if (!res.ok) { searchStatus.textContent = data.error || "search failed"; return; }
+    searchToken = data.token;
+    selection = null;
+    closeContents();
+    updateSelectionUI();
+    searchStatus.textContent = `${data.count.toLocaleString()} results`;
+    scheduleFetch(true);
+  } catch (e) { searchStatus.textContent = "server unreachable"; }
+}
+
+// re-run silently when the filter base changes under an active search
+async function reRunSearch() {
+  const q = searchInput.value.trim();
+  if (!q) return;
+  try {
+    const res = await fetch(
+      `/api/search?q=${encodeURIComponent(q)}&base=${filterToken}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    searchToken = data.token;
+    searchStatus.textContent = `${data.count.toLocaleString()} results`;
+  } catch (e) { /* ignore */ }
+}
+
+function clearSearch() {
+  searchToken = null;
+  searchInput.value = "";
+  searchStatus.textContent = "";
+  scheduleFetch(true);
+}
+
+document.getElementById("search-go").addEventListener("click", runSearch);
+document.getElementById("search-clear").addEventListener("click", clearSearch);
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+});
+
 document.getElementById("filter-apply").addEventListener("click", applyFilter);
 document.getElementById("filter-clear").addEventListener("click", () => {
   filterInput.value = "";
+  searchToken = null; searchInput.value = ""; searchStatus.textContent = "";
   for (const sel of filterControls.querySelectorAll("select")) sel.selectedIndex = -1;
   for (const inp of filterControls.querySelectorAll("input")) inp.value = "";
   postFilter({ where: "" });
@@ -749,6 +802,7 @@ async function init() {
   const { w, h } = cssSize();
   uppFit = 1.1 / Math.min(w, h);
   view = { cx: 0.5, cy: 0.5, upp: uppFit };
+  if (manifest.has_search) document.getElementById("search-box").classList.remove("hidden");
   loadColumns();
   loadLabelsAndDensity();
   requestRender();
