@@ -301,10 +301,13 @@ atlas label  DATASET --column topic       # (re)compute labels + density underla
   rather than just what's in each cell:
 </p>
 <ul>
-  <li><strong>The density underlay</strong> is a soft magenta heatmap
-      behind the thumbnails showing where images are concentrated. Bright
-      regions are dense; dark areas are sparse. It gives you the overall
-      shape of the collection at a glance.</li>
+  <li><strong>The density underlay</strong> shows where images are
+      concentrated: a soft magenta glow plus crisp <em>contour lines</em>
+      (like a topographic map — each ring is a density level, tighter
+      rings mean denser). Because the contours are drawn as vectors they
+      stay sharp at every zoom, rather than blurring like a stretched
+      image. It gives you the overall shape of the collection at a
+      glance.</li>
   <li><strong>Region labels</strong> are text names floating over the
       map — the dominant theme of each area, drawn from your chosen
       column. They are <em>hierarchical by zoom</em>: zoomed all the way

@@ -465,6 +465,9 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/density.webp":
                 p = self.ds.root / "density.webp"
                 return self._file(p, immutable=True) if p.exists() else self._error(404, "no density")
+            if route == "/api/contours":
+                p = self.ds.root / "density_contours.json"
+                return self._file(p) if p.exists() else self._json({"levels": []})
             if route == "/api/viewport":
                 q = parse_qs(url.query)
 

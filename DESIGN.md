@@ -425,8 +425,12 @@ artifacts, both derived only from coordinates + one metadata column, so
 they recompute in seconds without re-decoding:
 
 - `density.webp` — a blurred 2D histogram of point positions, colored as
-  a dark-navy→magenta→pink RGBA glow. The frontend stretches it behind
-  the markers as an underlay.
+  a dark-navy→magenta→pink RGBA glow, stretched behind the markers as a
+  soft underlay.
+- `density_contours.json` — marching-squares isolines of the same
+  density field at five levels, as line segments in world coords. The
+  frontend draws them as vectors in screen space, so the contour map
+  stays crisp at any zoom (the raster glow alone blurs when magnified).
 - `labels.json` — one label per distinct value of the column, merged by
   first keyword (so verbose multi-keyword topics sharing a lead term
   collapse into one clean region name), placed at the spatial median of

@@ -117,6 +117,10 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(m.get("has_density"))
         self.assertEqual(m.get("labels_column"), "color")
         self.assertTrue((self.ds.root / "density.webp").is_file())
+        contours = json.loads((self.ds.root / "density_contours.json").read_text())
+        self.assertTrue(contours["levels"])
+        for lvl in contours["levels"]:                      # segments are 4-tuples
+            self.assertEqual(len(lvl["segments"]) % 4, 0)
         data = json.loads((self.ds.root / "labels.json").read_text())
         names = {lab["text"] for lab in data["labels"]}
         self.assertEqual(names, {name for name, _ in COLORS})   # one per color

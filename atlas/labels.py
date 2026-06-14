@@ -45,14 +45,63 @@ def _ramp(t: np.ndarray) -> np.ndarray:
     return np.concatenate([rgb, alpha[..., None]], axis=-1).astype(np.uint8)
 
 
-def build_density(xy: np.ndarray, out_path: Path) -> None:
+def _density_field(xy: np.ndarray) -> np.ndarray:
+    """Smoothed, log-scaled point-density on a [0,1] grid, normalized to [0,1]."""
     hist, _, _ = np.histogram2d(
         xy[:, 1], xy[:, 0], bins=DENSITY_RES, range=[[0, 1], [0, 1]]
     )
-    hist = _blur(hist, passes=3)
-    t = np.log1p(hist)
-    t = t / (t.max() + 1e-9)
-    Image.fromarray(_ramp(t), "RGBA").save(out_path, "WEBP", quality=80)
+    t = np.log1p(_blur(hist, passes=3))
+    return t / (t.max() + 1e-9)
+
+
+def build_density(field: np.ndarray, out_path: Path) -> None:
+    Image.fromarray(_ramp(field), "RGBA").save(out_path, "WEBP", quality=80)
+
+
+# marching-squares case table: case -> list of (edgeA, edgeB) line segments.
+# corner bits: TL=1, TR=2, BR=4, BL=8.  edges: T(op) R(ight) B(ottom) L(eft).
+_MS = {
+    1: [("L", "T")], 2: [("T", "R")], 3: [("L", "R")], 4: [("R", "B")],
+    5: [("L", "T"), ("R", "B")], 6: [("T", "B")], 7: [("L", "B")],
+    8: [("B", "L")], 9: [("T", "B")], 10: [("T", "R"), ("B", "L")],
+    11: [("R", "B")], 12: [("L", "R")], 13: [("T", "R")], 14: [("L", "T")],
+}
+CONTOUR_LEVELS = [0.18, 0.32, 0.47, 0.63, 0.80]
+
+
+def build_contours(field: np.ndarray, out_path: Path) -> int:
+    R = field.shape[0]
+    A, B = field[:-1, :-1], field[:-1, 1:]
+    D, E = field[1:, :-1], field[1:, 1:]
+    levels = []
+    total = 0
+    for lv in CONTOUR_LEVELS:
+        case = ((A > lv) * 1 + (B > lv) * 2 + (E > lv) * 4 + (D > lv) * 8)
+        rows, cols = np.nonzero((case != 0) & (case != 15))
+        segs = []
+        for r, c in zip(rows.tolist(), cols.tolist()):
+            a, b, d, e = field[r, c], field[r, c + 1], field[r + 1, c], field[r + 1, c + 1]
+
+            def pt(edge):
+                if edge == "T":
+                    t = (lv - a) / (b - a) if b != a else 0.5
+                    return ((c + 0.5 + t) / R, (r + 0.5) / R)
+                if edge == "B":
+                    t = (lv - d) / (e - d) if e != d else 0.5
+                    return ((c + 0.5 + t) / R, (r + 1.5) / R)
+                if edge == "L":
+                    t = (lv - a) / (d - a) if d != a else 0.5
+                    return ((c + 0.5) / R, (r + 0.5 + t) / R)
+                t = (lv - b) / (e - b) if e != b else 0.5  # "R"
+                return ((c + 1.5) / R, (r + 0.5 + t) / R)
+
+            for e1, e2 in _MS[int(case[r, c])]:
+                (x0, y0), (x1, y1) = pt(e1), pt(e2)
+                segs += [round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)]
+        levels.append({"t": lv, "segments": segs})
+        total += len(segs) // 4
+    out_path.write_text(json.dumps({"levels": levels}), encoding="utf-8")
+    return total
 
 
 def build_labels(xy: np.ndarray, values: list, out_path: Path, max_labels: int) -> int:
@@ -105,7 +154,9 @@ def generate(dataset: Path, column: str | None, max_labels: int = 800) -> dict:
     """Compute density.webp (always) and labels.json (if a column is given).
     Returns manifest fields to merge: {"has_density": True, "labels_column": ...}."""
     xy = np.load(dataset / "points" / "xy.npy")
-    build_density(xy, dataset / "density.webp")
+    field = _density_field(xy)
+    build_density(field, dataset / "density.webp")
+    n_seg = build_contours(field, dataset / "density_contours.json")
     out = {"has_density": True}
 
     if column:
@@ -126,7 +177,7 @@ def generate(dataset: Path, column: str | None, max_labels: int = 800) -> dict:
         k = build_labels(xy, values, dataset / "labels.json", max_labels)
         out["labels_column"] = column
         print(f"  labels: {k} from column '{column}'")
-    print("  density underlay written")
+    print(f"  density underlay + {n_seg} contour segments written")
     return out
 
 

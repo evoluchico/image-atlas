@@ -17,6 +17,7 @@ let markerPx = +(localStorage.getItem("atlasMarkerPx") || 42);
 let labels = [];                 // [{text, x, y, count, level}], importance-sorted
 let maxDataLevel = 0;
 let densityImg = null;
+let contours = null;             // {levels: [{t, segments: [x0,y0,x1,y1,...]}]}
 let showLabels = localStorage.getItem("atlasLabels") !== "0";
 let showDensity = localStorage.getItem("atlasDensity") !== "0";
 
@@ -193,6 +194,27 @@ function fmtCount(n) {
        : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+// Density contour lines: drawn as vectors in screen space, so they stay crisp
+// at any zoom (unlike the stretched raster). Higher levels = denser = brighter.
+function drawContours() {
+  const sx0 = worldToScreen(0, 0), sx1 = worldToScreen(1, 1);
+  const w = sx1[0] - sx0[0], h = sx1[1] - sx0[1];
+  const n = contours.levels.length;
+  contours.levels.forEach((lvl, i) => {
+    const seg = lvl.segments;
+    if (!seg.length) return;
+    ctx.beginPath();
+    for (let k = 0; k < seg.length; k += 4) {
+      ctx.moveTo(sx0[0] + seg[k] * w, sx0[1] + seg[k + 1] * h);
+      ctx.lineTo(sx0[0] + seg[k + 2] * w, sx0[1] + seg[k + 3] * h);
+    }
+    const a = 0.22 + 0.5 * (i / Math.max(1, n - 1));
+    ctx.strokeStyle = `rgba(232, 116, 184, ${a})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+}
+
 // How many label levels to reveal at the current zoom: coarsest (level 0)
 // always, one more level per zoom step in. Finer themes emerge as you zoom —
 // the "breaks down into sub-regions" behaviour, from one flat label set.
@@ -245,13 +267,14 @@ function render() {
   const [bx0, by0] = worldToScreen(0, 0);
   const [bx1, by1] = worldToScreen(1, 1);
 
-  // density underlay (backmost)
+  // density underlay (backmost): soft raster glow + crisp vector contour lines
   if (showDensity && densityImg) {
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = 0.6;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(densityImg, bx0, by0, bx1 - bx0, by1 - by0);
     ctx.globalAlpha = 1;
   }
+  if (showDensity && contours) drawContours();
 
   ctx.strokeStyle = "#2a2e38";
   ctx.lineWidth = 1;
@@ -629,6 +652,10 @@ async function loadLabelsAndDensity() {
     const img = new Image();
     img.onload = () => { densityImg = img; requestRender(); };
     img.src = "density.webp";   // relative: works at "/" and under a subpath
+    try {
+      const c = await (await fetch("/api/contours")).json();
+      if (c.levels && c.levels.length) contours = c;
+    } catch (e) { /* no contours */ }
     wireToggle("density-toggle", "density-toggle-row", () => showDensity,
       (v) => { showDensity = v; localStorage.setItem("atlasDensity", v ? "1" : "0"); });
   }

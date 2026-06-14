@@ -60,6 +60,9 @@ def main() -> None:
     labels_path = ds.root / "labels.json"
     if labels_path.exists():
         data["labels"] = json.loads(labels_path.read_text(encoding="utf-8"))["labels"]
+    contours_path = ds.root / "density_contours.json"
+    if contours_path.exists():
+        data["contours"] = json.loads(contours_path.read_text(encoding="utf-8"))
     (out / "data.json").write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
 
     if (ds.root / "density.webp").exists():
