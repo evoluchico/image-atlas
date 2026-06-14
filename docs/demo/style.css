@@ -42,6 +42,19 @@ body { display: flex; }
 }
 #filter-box textarea:focus { outline: 1px solid var(--accent); }
 .filter-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+#filter-controls { display: flex; flex-direction: column; gap: 10px; }
+.fc { display: flex; flex-direction: column; gap: 3px; }
+.fc > .fc-name { font-size: 12px; color: var(--muted); text-transform: capitalize; }
+.fc select, .fc input[type="number"] {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 7px; font: 13px system-ui, sans-serif;
+}
+.fc select[multiple] { min-height: 64px; }
+.fc-range { display: flex; align-items: center; gap: 6px; }
+.fc-range input { width: 100%; }
+#advanced-sql { margin-top: 12px; }
+#advanced-sql summary { cursor: pointer; font-size: 12px; }
+#advanced-sql textarea { margin-top: 7px; }
 button {
   background: var(--accent); color: #fff; border: 0; border-radius: 6px;
   padding: 5px 14px; font-size: 13px; cursor: pointer;

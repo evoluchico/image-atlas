@@ -174,6 +174,26 @@ class TestEndToEnd(unittest.TestCase):
             self.assertGreater(a["count"], self.ds.threshold)
             self.assertTrue(mask[a["id"]])
 
+    def test_columns_and_structured_filter(self):
+        cols = {c["name"]: c for c in self.ds.columns_summary()}
+        self.assertEqual(cols["color"]["kind"], "choice")
+        self.assertEqual(set(cols["color"]["values"]), {n for n, _ in COLORS})
+        self.assertEqual(cols["idx"]["kind"], "range")
+        self.assertEqual(cols["idx"]["min"], 0)
+        self.assertEqual(cols["idx"]["max"], N_IMAGES - 1)
+        # choice filter
+        _, count = self.ds.make_filter_structured([{"col": "color", "values": ["red"]}])
+        self.assertEqual(count, N_IMAGES // 4)
+        # range filter
+        _, c2 = self.ds.make_filter_structured([{"col": "idx", "min": 0, "max": 9}])
+        self.assertEqual(c2, 10)
+        # combined, and unknown columns ignored safely
+        _, c3 = self.ds.make_filter_structured(
+            [{"col": "color", "values": ["red", "blue"]}, {"col": "nope", "values": ["x"]}]
+        )
+        self.assertEqual(c3, N_IMAGES // 2)
+        self.assertEqual(self.ds.make_filter_structured([])[0], "all")
+
     def test_viewport_unknown_token(self):
         with self.assertRaises(KeyError):
             self.ds.viewport(2, 0, 0, 1, 1, "bogus")

@@ -17,14 +17,20 @@
     <div id="ds-count" class="muted"></div>
   </header>
   <section id="filter-box">
-    <label for="filter-input">Filter (SQL WHERE on <code>images</code>)</label>
-    <textarea id="filter-input" rows="2" spellcheck="false"
-      placeholder="e.g.  family = 'rings' AND year &gt;= 2000"></textarea>
+    <label>Filters</label>
+    <div id="filter-controls"></div>
     <div class="filter-row">
-      <button id="filter-apply">Apply</button>
-      <button id="filter-clear" class="secondary">Clear</button>
+      <button id="filter-clear" class="secondary">Clear all</button>
       <span id="filter-status" class="muted"></span>
     </div>
+    <details id="advanced-sql">
+      <summary class="muted">Advanced: SQL</summary>
+      <textarea id="filter-input" rows="2" spellcheck="false"
+        placeholder="e.g.  family = 'rings' AND year &gt;= 2000"></textarea>
+      <div class="filter-row">
+        <button id="filter-apply">Run SQL</button>
+      </div>
+    </details>
     <div id="filter-error"></div>
   </section>
   <section id="display-box">

@@ -90,6 +90,45 @@
     return { mask, count };
   }
 
+  /* ---------------- structured filters (mirror columns_summary) --------- */
+
+  function columnsSummary() {
+    const out = [];
+    D.columns.forEach((name, i) => {
+      const vals = D.rows.map((r) => r[i]).filter((v) => v !== null && v !== "");
+      if (!vals.length) return;
+      if (vals.every((v) => typeof v === "number")) {
+        out.push({ name, kind: "range", min: Math.min(...vals), max: Math.max(...vals) });
+      } else {
+        const uniq = [...new Set(vals.map(String))].sort();
+        out.push(uniq.length <= 60
+          ? { name, kind: "choice", values: uniq }
+          : { name, kind: "text" });
+      }
+    });
+    return out;
+  }
+
+  function structuredMask(filters) {
+    const idx = {};
+    D.columns.forEach((c, i) => (idx[c] = i));
+    const mask = new Uint8Array(D.rows.length);
+    let count = 0;
+    D.rows.forEach((row, r) => {
+      const ok = (filters || []).every((f) => {
+        const i = idx[f.col];
+        if (i === undefined) return true;
+        const v = row[i];
+        if (f.values && f.values.length && !f.values.includes(String(v))) return false;
+        if (f.min != null && !(Number(v) >= f.min)) return false;
+        if (f.max != null && !(Number(v) <= f.max)) return false;
+        return true;
+      });
+      if (ok) { mask[r] = 1; count++; }
+    });
+    return { mask, count };
+  }
+
   /* --------------- viewport summarization (mirrors server.py) ----------- */
 
   function tileBuckets(z, x0, y0, x1, y1, mask) {
@@ -188,11 +227,20 @@
     };
     try {
       if (u.pathname === "/api/manifest") return json(D.manifest);
+      if (u.pathname === "/api/columns") return json({ columns: columnsSummary() });
       if (u.pathname === "/api/labels") return json({ labels: D.labels || [] });
       if (u.pathname === "/api/contours") return json(D.contours || { levels: [] });
 
       if (u.pathname === "/api/filter") {
-        const where = (JSON.parse(opts?.body || "{}").where || "").trim();
+        const body = JSON.parse(opts?.body || "{}");
+        if ("filters" in body) {
+          if (!body.filters.length) return json({ token: "all", count: D.rows.length });
+          const { mask, count } = structuredMask(body.filters);
+          const token = "s" + Math.random().toString(36).slice(2, 10);
+          tokens.set(token, mask);
+          return json({ token, count });
+        }
+        const where = (body.where || "").trim();
         if (!where) return json({ token: "all", count: D.rows.length });
         try {
           const { mask, count } = compileWhere(where);

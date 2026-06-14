@@ -593,15 +593,15 @@ document.getElementById("sel-export").addEventListener("click", async () => {
 const filterInput = document.getElementById("filter-input");
 const filterStatus = document.getElementById("filter-status");
 const filterError = document.getElementById("filter-error");
+const filterControls = document.getElementById("filter-controls");
 
-async function applyFilter() {
+async function postFilter(body) {
   filterError.textContent = "";
-  const where = filterInput.value.trim();
   try {
     const res = await fetch("/api/filter", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ where }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -620,10 +620,86 @@ async function applyFilter() {
   }
 }
 
+const applyFilter = () => postFilter({ where: filterInput.value.trim() });
+
+// Build a structured-filter spec from the rendered controls (no SQL typed).
+function applyStructured() {
+  filterInput.value = "";   // structured controls and the SQL box are exclusive
+  const filters = [];
+  for (const fc of filterControls.querySelectorAll(".fc")) {
+    const col = fc.dataset.col;
+    const sel = fc.querySelector("select");
+    if (sel) {
+      const values = [...sel.selectedOptions].map((o) => o.value).filter((v) => v !== "");
+      if (values.length) filters.push({ col, values });
+    } else {
+      const lo = fc.querySelector(".fc-min").value;
+      const hi = fc.querySelector(".fc-max").value;
+      const f = { col };
+      if (lo !== "") f.min = Number(lo);
+      if (hi !== "") f.max = Number(hi);
+      if ("min" in f || "max" in f) filters.push(f);
+    }
+  }
+  postFilter({ filters });
+}
+
+function renderFilterControls(columns) {
+  filterControls.innerHTML = "";
+  for (const c of columns) {
+    if (c.kind === "text") continue;   // free text: needs search, not a control
+    const fc = document.createElement("div");
+    fc.className = "fc";
+    fc.dataset.col = c.name;
+    const name = document.createElement("div");
+    name.className = "fc-name";
+    name.textContent = c.name;
+    fc.appendChild(name);
+    if (c.kind === "choice") {
+      const sel = document.createElement("select");
+      sel.multiple = c.values.length > 1;
+      sel.size = Math.min(6, Math.max(2, c.values.length));
+      for (const v of c.values) {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = v;
+        sel.appendChild(o);
+      }
+      sel.addEventListener("change", applyStructured);
+      fc.appendChild(sel);
+    } else {                            // range
+      const row = document.createElement("div");
+      row.className = "fc-range";
+      row.innerHTML =
+        `<input type="number" class="fc-min" placeholder="${c.min}">` +
+        `<span class="muted">–</span>` +
+        `<input type="number" class="fc-max" placeholder="${c.max}">`;
+      for (const inp of row.querySelectorAll("input")) {
+        inp.addEventListener("change", applyStructured);
+      }
+      fc.appendChild(row);
+    }
+    filterControls.appendChild(fc);
+  }
+  if (!filterControls.children.length) {
+    filterControls.innerHTML =
+      '<span class="muted">No filterable metadata columns.</span>';
+  }
+}
+
+async function loadColumns() {
+  try {
+    const { columns } = await (await fetch("/api/columns")).json();
+    renderFilterControls(columns);
+  } catch (e) { /* leave empty */ }
+}
+
 document.getElementById("filter-apply").addEventListener("click", applyFilter);
 document.getElementById("filter-clear").addEventListener("click", () => {
   filterInput.value = "";
-  applyFilter();
+  for (const sel of filterControls.querySelectorAll("select")) sel.selectedIndex = -1;
+  for (const inp of filterControls.querySelectorAll("input")) inp.value = "";
+  postFilter({ where: "" });
 });
 filterInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); applyFilter(); }
@@ -673,6 +749,7 @@ async function init() {
   const { w, h } = cssSize();
   uppFit = 1.1 / Math.min(w, h);
   view = { cx: 0.5, cy: 0.5, upp: uppFit };
+  loadColumns();
   loadLabelsAndDensity();
   requestRender();
   scheduleFetch(true);

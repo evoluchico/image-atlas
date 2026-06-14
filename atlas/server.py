@@ -174,6 +174,59 @@ class Dataset:
 
     # ----------------------------------------------------------- filters
 
+    @property
+    def user_columns(self) -> list[dict]:
+        return self.manifest.get("metadata_columns", [])
+
+    def columns_summary(self) -> list[dict]:
+        """Per user column: numeric range, small value list, or free-text —
+        enough for the UI to render sliders/dropdowns instead of asking for SQL."""
+        con = self._connect()
+        try:
+            out = []
+            for c in self.user_columns:
+                name, typ = c["name"], c["type"]
+                if typ in ("INTEGER", "REAL"):
+                    lo, hi = con.execute(
+                        f'SELECT MIN("{name}"), MAX("{name}") FROM images'
+                    ).fetchone()
+                    if lo is not None:
+                        out.append({"name": name, "kind": "range", "min": lo, "max": hi})
+                    continue
+                (distinct,) = con.execute(
+                    f'SELECT COUNT(DISTINCT "{name}") FROM images'
+                ).fetchone()
+                if distinct <= 60:
+                    vals = [r[0] for r in con.execute(
+                        f'SELECT DISTINCT "{name}" FROM images '
+                        f'WHERE "{name}" IS NOT NULL ORDER BY "{name}"'
+                    )]
+                    out.append({"name": name, "kind": "choice", "values": vals})
+                else:
+                    out.append({"name": name, "kind": "text"})
+            return out
+        finally:
+            con.close()
+
+    def _store_ids(self, token: str, ids: np.ndarray, where: str) -> tuple[str, int]:
+        ids = ids[(ids >= 0) & (ids < self.n)]
+        mask = np.zeros(self.n, dtype=bool)
+        mask[ids] = True
+        with self._lock:
+            self._filters[token] = (mask, len(ids), where)
+            while len(self._filters) > 32:
+                self._filters.popitem(last=False)
+        return token, int(len(ids))
+
+    def _run_ids(self, sql: str, params=()) -> np.ndarray:
+        con = self._connect()
+        try:
+            return np.fromiter(
+                (r[0] for r in con.execute(sql, params)), dtype=np.int64
+            )
+        finally:
+            con.close()
+
     def make_filter(self, where: str) -> tuple[str, int]:
         where = (where or "").strip().rstrip(";")
         if not where:
@@ -184,22 +237,39 @@ class Dataset:
             if hit:
                 self._filters.move_to_end(token)
                 return token, hit[1]
-        con = self._connect()
-        try:
-            ids = np.fromiter(
-                (r[0] for r in con.execute(f"SELECT id FROM images WHERE ({where})")),
-                dtype=np.int64,
-            )
-        finally:
-            con.close()
-        ids = ids[(ids >= 0) & (ids < self.n)]
-        mask = np.zeros(self.n, dtype=bool)
-        mask[ids] = True
+        return self._store_ids(token, self._run_ids(
+            f"SELECT id FROM images WHERE ({where})"), where)
+
+    def make_filter_structured(self, filters: list) -> tuple[str, int]:
+        """Build a parameterized WHERE from UI controls — no user SQL.
+        Each filter: {col, values:[...]} for choices, {col, min, max} for ranges."""
+        allowed = {c["name"] for c in self.user_columns}
+        clauses, params = [], []
+        for f in filters or []:
+            col = f.get("col")
+            if col not in allowed:
+                continue
+            if f.get("values"):
+                vals = list(f["values"])
+                clauses.append(f'"{col}" IN ({",".join("?" * len(vals))})')
+                params += vals
+            if f.get("min") is not None:
+                clauses.append(f'"{col}" >= ?')
+                params.append(f["min"])
+            if f.get("max") is not None:
+                clauses.append(f'"{col}" <= ?')
+                params.append(f["max"])
+        if not clauses:
+            return ALL_TOKEN, self.n
+        where = " AND ".join(clauses)
+        token = "s" + hashlib.sha1((where + repr(params)).encode()).hexdigest()[:11]
         with self._lock:
-            self._filters[token] = (mask, len(ids), where)
-            while len(self._filters) > 32:
-                self._filters.popitem(last=False)
-        return token, len(ids)
+            hit = self._filters.get(token)
+            if hit:
+                self._filters.move_to_end(token)
+                return token, hit[1]
+        return self._store_ids(
+            token, self._run_ids(f"SELECT id FROM images WHERE {where}", params), where)
 
     def make_selection(self, polygon, base_token: str) -> tuple[str, int]:
         poly = np.asarray(polygon, dtype=np.float64)
@@ -462,6 +532,8 @@ class Handler(BaseHTTPRequestHandler):
                 if p.exists():
                     return self._file(p)
                 return self._json({"labels": []})
+            if route == "/api/columns":
+                return self._json({"columns": self.ds.columns_summary()})
             if route == "/density.webp":
                 p = self.ds.root / "density.webp"
                 return self._file(p, immutable=True) if p.exists() else self._error(404, "no density")
@@ -556,7 +628,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "body must be JSON")
         if route == "/api/filter":
             try:
-                token, count = self.ds.make_filter(payload.get("where", ""))
+                if "filters" in payload:
+                    token, count = self.ds.make_filter_structured(payload["filters"])
+                else:
+                    token, count = self.ds.make_filter(payload.get("where", ""))
             except sqlite3.Error as e:
                 return self._error(400, f"SQL error: {e}")
         else:

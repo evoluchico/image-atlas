@@ -359,14 +359,14 @@ atlas label  DATASET --column topic       # (re)compute labels + density underla
           with a "Show more" button. Click any grid cell to inspect
           that image. This is how you look inside piles that are too
           dense to split spatially (e.g. near-duplicates)</td></tr>
-  <tr><td><strong>filter box</strong></td>
-      <td>type a SQL WHERE clause over your metadata columns and press
-          <kbd>Enter</kbd> (or Apply). Examples:<br>
-          <code>year = 2020</code><br>
-          <code>topic LIKE '%protest%' AND year &gt;= 2021</code><br>
-          <code>width &gt; height</code><br>
-          The match count is shown; stacks re-count instantly; points
-          never move. Clear restores everything</td></tr>
+  <tr><td><strong>Filters panel</strong></td>
+      <td>one control per metadata column, generated automatically: a
+          multi-select for categories, a min–max pair for numbers. Pick
+          values and the map updates — no query language to learn. The
+          match count is shown; stacks re-count instantly; points never
+          move. <em>Clear all</em> resets them. An <em>Advanced: SQL</em>
+          drawer still accepts a raw WHERE clause (e.g.
+          <code>width &gt; height</code>) for power users</td></tr>
   <tr><td><strong>thumbnail size slider</strong></td>
       <td>scales how large thumbnails are drawn (24–96&nbsp;px) without
           changing the aggregation grid — purely a display preference;
