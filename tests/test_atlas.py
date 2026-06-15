@@ -46,7 +46,8 @@ def build_fixture(root: Path) -> Path:
     build.run(SimpleNamespace(
         images=str(images), files=None, out=str(out), metadata=str(root / "meta.csv"),
         coords=str(root / "coords.csv"), name="fixture", workers=1, cell=48,
-        preview_max=512, max_zoom=6, threshold=4, label_column="color", force=False,
+        preview_max=512, max_zoom=6, threshold=4, label_column="color",
+        hide_columns="idx", force=False,
     ))
     return out
 
@@ -178,13 +179,11 @@ class TestEndToEnd(unittest.TestCase):
         cols = {c["name"]: c for c in self.ds.columns_summary()}
         self.assertEqual(cols["color"]["kind"], "choice")
         self.assertEqual(set(cols["color"]["values"]), {n for n, _ in COLORS})
-        self.assertEqual(cols["idx"]["kind"], "range")
-        self.assertEqual(cols["idx"]["min"], 0)
-        self.assertEqual(cols["idx"]["max"], N_IMAGES - 1)
+        self.assertNotIn("idx", cols)   # hidden via filter_hide (fixture builds with it)
         # choice filter
         _, count = self.ds.make_filter_structured([{"col": "color", "values": ["red"]}])
         self.assertEqual(count, N_IMAGES // 4)
-        # range filter
+        # a hidden column is still filterable (e.g. structured, or Advanced SQL)
         _, c2 = self.ds.make_filter_structured([{"col": "idx", "min": 0, "max": 9}])
         self.assertEqual(c2, 10)
         # combined, and unknown columns ignored safely

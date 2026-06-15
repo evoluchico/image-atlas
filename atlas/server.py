@@ -191,11 +191,14 @@ class Dataset:
     def columns_summary(self) -> list[dict]:
         """Per user column: numeric range, small value list, or free-text —
         enough for the UI to render sliders/dropdowns instead of asking for SQL."""
+        hidden = set(self.manifest.get("filter_hide", []))
         con = self._connect()
         try:
             out = []
             for c in self.user_columns:
                 name, typ = c["name"], c["type"]
+                if name in hidden:   # no auto control; still usable via Advanced SQL
+                    continue
                 if typ in ("INTEGER", "REAL"):
                     lo, hi = con.execute(
                         f'SELECT MIN("{name}"), MAX("{name}") FROM images'

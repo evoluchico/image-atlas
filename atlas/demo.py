@@ -112,6 +112,7 @@ def run(args) -> None:
             max_zoom=8,
             threshold=8,
             label_column="family",
+            hide_columns=None,
             force=True,
         )
     )

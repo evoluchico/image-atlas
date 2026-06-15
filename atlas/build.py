@@ -437,6 +437,7 @@ def run(args) -> None:
         "preview_max_side": args.preview_max,
         "coords_source": coords_source,
         "metadata_columns": [{"name": i, "type": t} for i, t in user_cols],
+        "filter_hide": [c.strip() for c in (args.hide_columns or "").split(",") if c.strip()],
         **label_fields,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -461,6 +462,8 @@ def add_build_options(p) -> None:
     p.add_argument("--threshold", type=int, default=8, help="max items per tile before aggregating")
     p.add_argument("--label-column", help="metadata column to derive region labels from "
                                           "(a density underlay is always written)")
+    p.add_argument("--hide-columns", help="comma-separated columns to omit from the filter "
+                                          "controls (still usable via Advanced SQL)")
 
 
 def add_parser(sub) -> None:

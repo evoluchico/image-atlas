@@ -93,8 +93,10 @@
   /* ---------------- structured filters (mirror columns_summary) --------- */
 
   function columnsSummary() {
+    const hidden = new Set(D.manifest.filter_hide || []);
     const out = [];
     D.columns.forEach((name, i) => {
+      if (hidden.has(name)) return;
       const vals = D.rows.map((r) => r[i]).filter((v) => v !== null && v !== "");
       if (!vals.length) return;
       if (vals.every((v) => typeof v === "number")) {
