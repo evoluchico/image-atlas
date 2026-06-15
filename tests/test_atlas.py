@@ -241,14 +241,18 @@ class TestEndToEnd(unittest.TestCase):
         with Dataset(copy) as ds:
             self.assertTrue(ds.has_ocr and ds.has_search)
             self.assertEqual(sorted(ds._ocr_ids("vaccine", 10)), [5, 9])
-            token, count = ds.search("vaccine")
+            # exact (text) mode: true count + ranked ids returned
+            token, count, ids, exact = ds.search("vaccine", mode="text")
             self.assertEqual(count, 2)
+            self.assertTrue(exact)
+            self.assertEqual(sorted(ids), [5, 9])
             mask = ds.get_mask(token)
             self.assertTrue(mask[5] and mask[9] and not mask[12])
             # composes with a base filter
             base, _ = ds.make_filter_structured([{"col": "idx", "min": 0, "max": 7}])
-            _, c2 = ds.search("vaccine", base)
+            _, c2, ids2, _ = ds.search("vaccine", base, mode="text")
             self.assertEqual(c2, 1)   # only id 5 is within idx<=7
+            self.assertEqual(ids2, [5])
         shutil.rmtree(copy)
 
     def test_retile(self):

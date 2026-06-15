@@ -396,9 +396,12 @@ atlas ocr DATASET --lang en</code></pre>
           dense to split spatially (e.g. near-duplicates)</td></tr>
   <tr><td><strong>Search box</strong></td>
       <td>(if the dataset supports it) type what you want to see — content
-          (CLIP) and in-image text (OCR) are searched together and the
-          best matches drive the map. Composes with the filters: it
-          searches within whatever is currently filtered</td></tr>
+          (CLIP) and in-image text (OCR) are searched together; the best
+          matches drive the map and appear as a ranked grid in the panel.
+          Tick <em>Exact text only</em> to restrict to images whose
+          printed text matches (a precise count, e.g. 391), instead of
+          the fused "top N by relevance". Composes with the filters —
+          it searches within whatever is currently filtered</td></tr>
   <tr><td><strong>Filters panel</strong></td>
       <td>one control per metadata column, generated automatically: a
           multi-select for categories, a min–max pair for numbers. Pick

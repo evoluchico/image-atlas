@@ -165,6 +165,7 @@ class Dataset:
             raise DatasetError(f"metadata.sqlite has {rows} rows, manifest says {self.n}")
 
         self._filters: OrderedDict[str, tuple] = OrderedDict()  # token -> (mask, count, where)
+        self._grid_cache: dict[str, list] = {}   # search token -> top ranked ids
         self._lock = threading.Lock()
 
         # optional search: CLIP text->image and/or OCR full-text
@@ -298,23 +299,38 @@ class Dataset:
         finally:
             con.close()
 
-    def search(self, query: str, base_token: str = ALL_TOKEN, k: int = 1000) -> tuple[str, int]:
-        """Unified text search: fuse CLIP text->image ranking and OCR full-text
-        matches with Reciprocal Rank Fusion, return the top k as a filter token.
-        Restricted to base_token's set, so search composes with the filters."""
+    GRID_IDS = 120   # ranked ids returned for the side-panel results grid
+
+    def search(self, query: str, base_token: str = ALL_TOKEN,
+               mode: str = "fused", k: int = 1000) -> tuple[str, int, list, bool]:
+        """Text search restricted to base_token's set (composes with filters).
+        mode='text': OCR full-text only — an *exact* set with a true count.
+        mode='fused': CLIP + OCR fused by RRF — the top k by relevance.
+        Returns (token, count, top_ranked_ids, exact)."""
         query = (query or "").strip()
         if not query:
-            return base_token, (self.n if base_token in ("", ALL_TOKEN)
-                                else int(self.get_mask(base_token).sum()))
+            base_count = (self.n if base_token in ("", ALL_TOKEN)
+                          else int(self.get_mask(base_token).sum()))
+            return base_token, base_count, [], True
         base = self.get_mask(base_token)   # None = all; may raise KeyError
-        token = "q" + hashlib.sha1((query + "|" + base_token).encode()).hexdigest()[:11]
+        keep = (lambda i: True) if base is None else (lambda i: bool(base[i]))
+        token = "q" + hashlib.sha1(
+            (mode + "|" + query + "|" + base_token).encode()).hexdigest()[:11]
         with self._lock:
             hit = self._filters.get(token)
             if hit:
-                self._filters.move_to_end(token)
-                return token, hit[1]
+                return (token, hit[1], list(self._grid_cache.get(token, [])),
+                        mode == "text")
 
-        keep = (lambda i: True) if base is None else (lambda i: bool(base[i]))
+        if mode == "text":   # exact: OCR matches only, ranked by relevance
+            ordered = [i for i in self._ocr_ids(query, 20000) if keep(i)]
+            tok, count = self._store_ids(token, np.array(ordered, np.int64), f"text:{query}")
+            grid = ordered[: self.GRID_IDS]
+            with self._lock:
+                self._grid_cache[token] = grid
+            return tok, count, grid, True
+
+        # fused: Reciprocal Rank Fusion of CLIP and OCR rankings
         pool = max(k * 4, 2000)
         scores: dict[int, float] = {}
         if self.search_cfg:
@@ -333,12 +349,14 @@ class Dataset:
             rank = 0
             for i in self._ocr_ids(query, pool * 3):
                 if keep(i):
-                    scores[i] = scores.get(i, 0.0) + 1.0 / (60 + rank)
+                    scores[i] = scores.get(i, 0.0) + 2.0 / (60 + rank)  # weight literal text
                     rank += 1
-        if not scores:
-            return self._store_ids(token, np.empty(0, np.int64), f"search:{query}")
-        top = sorted(scores, key=scores.get, reverse=True)[:k]
-        return self._store_ids(token, np.array(top, np.int64), f"search:{query}")
+        ordered = sorted(scores, key=scores.get, reverse=True)[:k]
+        tok, count = self._store_ids(token, np.array(ordered, np.int64), f"search:{query}")
+        grid = ordered[: self.GRID_IDS]
+        with self._lock:
+            self._grid_cache[token] = grid
+        return tok, count, grid, False
 
     def make_selection(self, polygon, base_token: str) -> tuple[str, int]:
         poly = np.asarray(polygon, dtype=np.float64)
@@ -598,14 +616,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({**self.ds.manifest, "has_search": self.ds.has_search})
             if route == "/api/search":
                 q = parse_qs(url.query)
+                mode = "text" if q.get("mode", ["fused"])[0] == "text" else "fused"
                 try:
-                    token, count = self.ds.search(
-                        q.get("q", [""])[0], q.get("base", [ALL_TOKEN])[0])
+                    token, count, ids, exact = self.ds.search(
+                        q.get("q", [""])[0], q.get("base", [ALL_TOKEN])[0], mode)
                 except KeyError:
                     return self._error(410, "unknown base token; re-apply the filter")
                 except Exception as e:
                     return self._error(500, f"search failed: {e}")
-                return self._json({"token": token, "count": count})
+                return self._json({"token": token, "count": count, "ids": ids, "exact": exact})
             if route == "/api/labels":
                 p = self.ds.root / "labels.json"
                 if p.exists():

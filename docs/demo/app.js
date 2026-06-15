@@ -452,13 +452,26 @@ function closeContents() {
 }
 
 async function openTileContents(tile) {
-  contents = { z: tile.z, tx: tile.tx, ty: tile.ty, total: 0, ids: [], selected: null };
+  contents = { kind: "tile", z: tile.z, tx: tile.tx, ty: tile.ty,
+               total: 0, ids: [], selected: null };
   contentsBox.classList.remove("hidden");
   await loadMoreContents();
 }
 
+// ranked search results, shown in the same grid as stack contents
+function showSearchResults(ids, count, exact) {
+  contents = { kind: "search", total: count, ids: ids.slice(), selected: null };
+  contentsBox.classList.remove("hidden");
+  contentsCount.textContent = exact
+    ? `${count.toLocaleString()} exact matches — showing top ${ids.length}`
+    : `top ${ids.length} most relevant`;
+  contentsMore.classList.add("hidden");
+  ensureSprites(ids);
+  renderContents();
+}
+
 async function loadMoreContents() {
-  if (!contents) return;
+  if (!contents || contents.kind !== "tile") return;
   const params = new URLSearchParams({
     z: contents.z, tx: contents.tx, ty: contents.ty,
     token: activeToken(), offset: contents.ids.length, limit: GRID_PAGE,
@@ -700,43 +713,36 @@ async function loadColumns() {
 
 const searchInput = document.getElementById("search-input");
 const searchStatus = document.getElementById("search-status");
+const searchExact = document.getElementById("search-exact");
 
 async function runSearch() {
   const q = searchInput.value.trim();
   if (!q) { clearSearch(); return; }
+  const mode = searchExact.checked ? "text" : "fused";
   searchStatus.textContent = "searching…";
   try {
     const res = await fetch(
-      `/api/search?q=${encodeURIComponent(q)}&base=${filterToken}`);
+      `/api/search?q=${encodeURIComponent(q)}&base=${filterToken}&mode=${mode}`);
     const data = await res.json();
     if (!res.ok) { searchStatus.textContent = data.error || "search failed"; return; }
     searchToken = data.token;
     selection = null;
-    closeContents();
     updateSelectionUI();
-    searchStatus.textContent = `${data.count.toLocaleString()} results`;
+    searchStatus.textContent = data.exact
+      ? `${data.count.toLocaleString()} matches`
+      : `top ${data.count.toLocaleString()} by relevance`;
+    showSearchResults(data.ids || [], data.count, data.exact);  // ranked grid
     scheduleFetch(true);
   } catch (e) { searchStatus.textContent = "server unreachable"; }
 }
 
-// re-run silently when the filter base changes under an active search
-async function reRunSearch() {
-  const q = searchInput.value.trim();
-  if (!q) return;
-  try {
-    const res = await fetch(
-      `/api/search?q=${encodeURIComponent(q)}&base=${filterToken}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    searchToken = data.token;
-    searchStatus.textContent = `${data.count.toLocaleString()} results`;
-  } catch (e) { /* ignore */ }
-}
+const reRunSearch = runSearch;   // re-run when the filter base changes
 
 function clearSearch() {
   searchToken = null;
   searchInput.value = "";
   searchStatus.textContent = "";
+  if (contents && contents.kind === "search") closeContents();
   scheduleFetch(true);
 }
 
@@ -744,6 +750,9 @@ document.getElementById("search-go").addEventListener("click", runSearch);
 document.getElementById("search-clear").addEventListener("click", clearSearch);
 searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+});
+searchExact.addEventListener("change", () => {
+  if (searchInput.value.trim()) runSearch();
 });
 
 document.getElementById("filter-apply").addEventListener("click", applyFilter);
