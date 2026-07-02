@@ -35,6 +35,8 @@ let lasso = null;                // screen-space points while drawing a lasso
 let scene = { z: 0, aggregates: [], items: [] };
 let markers = [];                // hit-test rects, topmost last
 let hoverId = null, pinnedId = null;
+let anim = null;                 // zoom-level transition: stacks explode / implode
+let animRAF = 0;
 
 function activeToken() {
   return selection ? selection.token : (searchToken || filterToken);
@@ -139,7 +141,9 @@ async function doFetch() {
     if (!res.ok) return;
     const data = await res.json();
     if (seq !== fetchSeq) return;    // stale response
+    const prev = scene;
     scene = data;
+    setupTransition(prev, data);     // animate stacks splitting / merging on z change
     ensureSprites([
       ...scene.aggregates.map((a) => a.id),
       ...scene.items.map((it) => it.id),
@@ -151,15 +155,16 @@ async function doFetch() {
 /* ------------------------------------------------------------- rendering */
 
 function requestRender() {
-  if (renderQueued) return;
+  if (renderQueued || anim) return;   // while animating, the anim ticker drives render()
   renderQueued = true;
   requestAnimationFrame(() => { renderQueued = false; render(); });
 }
 
-function drawSprite(id, cxPx, cyPx, sizePx) {
+function drawSprite(id, cxPx, cyPx, sizePx, alpha = 1) {
   const entry = spriteCache.get(id);
   const cell = manifest.sprite_cell;
   const x = cxPx - sizePx / 2, y = cyPx - sizePx / 2;
+  if (alpha !== 1) ctx.globalAlpha = alpha;
   if (entry && entry.img) {
     ctx.drawImage(entry.img, entry.sx, entry.sy, cell, cell, x, y, sizePx, sizePx);
   } else {
@@ -170,6 +175,7 @@ function drawSprite(id, cxPx, cyPx, sizePx) {
   ctx.strokeStyle = active ? "#5b9dd9" : "rgba(0,0,0,.55)";
   ctx.lineWidth = active ? 2 : 1;
   ctx.strokeRect(x + 0.5, y + 0.5, sizePx - 1, sizePx - 1);
+  if (alpha !== 1) ctx.globalAlpha = 1;
   return { x, y, w: sizePx, h: sizePx };
 }
 
@@ -254,6 +260,101 @@ function renderLabels() {
   }
 }
 
+/* ------------------------------------------------- stack explode / implode
+ * When a zoom step changes the aggregation level, the whole scene is swapped
+ * at once. Instead of a hard cut we animate: on zoom-IN each new (finer) stack
+ * flies out from the coarse stack it emerged from; on zoom-OUT the old finer
+ * stacks fly inward and fade into the coarse stack that absorbs them. The
+ * parent/child link is derived purely from world coordinates — a marker at
+ * (x, y) sits in tile floor(x·2^z), so its ancestor at a coarser z is just
+ * floor(x·2^coarseZ). No backend fields needed.
+ */
+const ANIM_MS = 300;
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+function markerSizeAgg(count) {
+  return Math.min(markerPx * 1.55, markerPx + 7 * Math.log10(count));
+}
+
+function tileKey(x, y, z) {
+  const n = Math.pow(2, z);
+  return `${Math.floor(x * n)},${Math.floor(y * n)}`;
+}
+
+// Flatten a scene into drawable markers, each carrying its on-screen size, so a
+// child can grow out of / shrink into its parent's actual footprint.
+function sceneMarkers(s) {
+  const out = [];
+  const itemPx = Math.round(markerPx * 0.7);
+  for (const it of s.items) out.push({ id: it.id, x: it.x, y: it.y, size: itemPx });
+  for (const ag of s.aggregates)
+    out.push({ id: ag.id, x: ag.x, y: ag.y, size: markerSizeAgg(ag.count) });
+  return out;
+}
+
+function setupTransition(prev, next) {
+  if (animRAF) { cancelAnimationFrame(animRAF); animRAF = 0; }
+  anim = null;
+  if (!prev || prev.z === next.z) return;                 // pan / same level: no anim
+  const prevEmpty = !prev.aggregates.length && !prev.items.length;
+  const nextEmpty = !next.aggregates.length && !next.items.length;
+  if (prevEmpty || nextEmpty) return;                     // first paint / cleared: no anim
+  const dir = next.z > prev.z ? "in" : "out";
+  const coarseZ = Math.min(prev.z, next.z);
+  const coarse = new Map();                               // ancestor tile -> coarse marker
+  for (const m of sceneMarkers(dir === "in" ? prev : next))
+    coarse.set(tileKey(m.x, m.y, coarseZ), m);
+  anim = { start: performance.now(), dir, coarseZ, coarse,
+           ghosts: dir === "out" ? sceneMarkers(prev) : null };
+  startAnimTicker();
+}
+
+function startAnimTicker() {
+  if (animRAF) return;
+  const tick = () => {
+    animRAF = 0;
+    if (!anim) return;
+    const done = (performance.now() - anim.start) >= ANIM_MS;
+    if (done) anim = null;                                // last frame lands at rest
+    render();
+    if (!done) animRAF = requestAnimationFrame(tick);
+  };
+  animRAF = requestAnimationFrame(tick);
+}
+
+// Screen-space placement for one current-scene marker, factoring the animation.
+function animMarker(x, y, base) {
+  const [sx, sy] = worldToScreen(x, y);
+  if (!anim) return { sx, sy, size: base, alpha: 1 };
+  const e = easeOut(clamp((performance.now() - anim.start) / ANIM_MS, 0, 1));
+  if (anim.dir === "in") {
+    const p = anim.coarse.get(tileKey(x, y, anim.coarseZ));
+    if (!p) return { sx, sy, size: base, alpha: e };      // no ancestor: just fade in
+    const [px, py] = worldToScreen(p.x, p.y);
+    return { sx: lerp(px, sx, e), sy: lerp(py, sy, e),
+             size: lerp(p.size, base, e), alpha: 1 };      // fly out & grow from parent
+  }
+  return { sx, sy, size: base, alpha: e };                // zoom-out: coarse fades in place
+}
+
+// Zoom-out only: draw the outgoing finer stacks sliding into their absorber.
+function drawGhosts() {
+  const e = easeOut(clamp((performance.now() - anim.start) / ANIM_MS, 0, 1));
+  for (const g of anim.ghosts) {
+    const [gx, gy] = worldToScreen(g.x, g.y);
+    const dest = anim.coarse.get(tileKey(g.x, g.y, anim.coarseZ));
+    let sx = gx, sy = gy, size = g.size;
+    if (dest) {
+      const [dx, dy] = worldToScreen(dest.x, dest.y);
+      sx = lerp(gx, dx, e); sy = lerp(gy, dy, e);
+      size = lerp(g.size, dest.size, e);
+    }
+    drawSprite(g.id, sx, sy, size, 1 - e);
+  }
+}
+
 function render() {
   const { w, h } = cssSize();
   const dpr = window.devicePixelRatio || 1;
@@ -282,19 +383,25 @@ function render() {
   ctx.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
 
   markers = [];
+  if (anim && anim.dir === "out") drawGhosts();   // outgoing stacks sliding inward
   const itemPx = Math.round(markerPx * 0.7);
   for (const it of scene.items) {
-    const [sx, sy] = worldToScreen(it.x, it.y);
-    const rect = drawSprite(it.id, sx, sy, itemPx);
-    markers.push({ ...rect, id: it.id, count: 1 });
+    const a = animMarker(it.x, it.y, itemPx);
+    drawSprite(it.id, a.sx, a.sy, a.size, a.alpha);
+    const [fx, fy] = worldToScreen(it.x, it.y);   // hit-test at rest position
+    markers.push({ x: fx - itemPx / 2, y: fy - itemPx / 2, w: itemPx, h: itemPx,
+                   id: it.id, count: 1 });
   }
   for (const ag of scene.aggregates) {
-    const [sx, sy] = worldToScreen(ag.x, ag.y);
-    const size = Math.min(markerPx * 1.55, markerPx + 7 * Math.log10(ag.count));
-    const rect = drawSprite(ag.id, sx, sy, size);
+    const size = markerSizeAgg(ag.count);
+    const a = animMarker(ag.x, ag.y, size);
+    const rect = drawSprite(ag.id, a.sx, a.sy, a.size, a.alpha);
+    if (a.alpha < 1) ctx.globalAlpha = a.alpha;
     drawBadge(fmtCount(ag.count), rect.x + rect.w - 4, rect.y + 2);
-    markers.push({ ...rect, id: ag.id, count: ag.count,
-                   z: scene.z, tx: ag.tx, ty: ag.ty });
+    if (a.alpha < 1) ctx.globalAlpha = 1;
+    const [fx, fy] = worldToScreen(ag.x, ag.y);
+    markers.push({ x: fx - size / 2, y: fy - size / 2, w: size, h: size,
+                   id: ag.id, count: ag.count, z: scene.z, tx: ag.tx, ty: ag.ty });
   }
   if (lasso && lasso.length > 1) {
     ctx.beginPath();
