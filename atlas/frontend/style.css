@@ -88,4 +88,42 @@ button:hover { filter: brightness(1.12); }
 #contents-grid { display: block; width: 100%; cursor: pointer; border-radius: 6px; }
 #contents-more { margin-top: 8px; width: 100%; }
 
-.hidden { display: none; }
+/* ---- semantic axis ---- */
+#axis-details summary { cursor: pointer; font-size: 12px; }
+.axis-body { margin-top: 10px; }
+.axis-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.axis-title { font-size: 12px; color: var(--text); }
+.axis-end { display: flex; flex-direction: column; gap: 4px; }
+.axis-end input.axis-text {
+  width: 100%; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+  font: 13px system-ui, sans-serif;
+}
+.axis-end input.axis-text:focus { outline: 1px solid var(--accent); }
+.axis-tools { display: flex; align-items: center; gap: 5px; }
+.axis-tools button { padding: 3px 8px; font-size: 12px; }
+.axis-tools button.picking { background: var(--accent); color: #fff; outline: 2px solid #fff3; }
+.axis-count { margin-left: auto; }
+#axis-status { margin-top: 6px; }
+#axis-status.err { color: var(--error); }
+#axis-legend { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+#axis-legend .bar {
+  flex: 1; height: 10px; border-radius: 5px;
+  background: linear-gradient(90deg, #3b6fd6, #8286 46%, #8286 54%, #d64b3b);
+}
+
+/* ---- spectrum strip (overlay mode) ---- */
+#axis-strip {
+  position: absolute; left: 12px; right: 12px; bottom: 30px; height: 62px;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(21,23,28,.82); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 10px; pointer-events: none;
+}
+#axis-strip-canvas { flex: 1; height: 52px; display: block; pointer-events: auto; cursor: pointer; }
+.axis-strip-label {
+  font-size: 12px; color: var(--text); white-space: nowrap; max-width: 22%;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* utility: must beat ID-level `display` rules (e.g. #axis-strip, #axis-legend) */
+.hidden { display: none !important; }

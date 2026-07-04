@@ -162,10 +162,16 @@ def density_scores(xy: np.ndarray) -> np.ndarray:
 
 # ------------------------------------------------------------ tile index
 
-def write_tile_indexes(points_dir: Path, xy: np.ndarray, rep: np.ndarray, max_zoom: int) -> None:
+def compute_tile_indexes(xy: np.ndarray, rep: np.ndarray, max_zoom: int) -> dict:
+    """Quadtree tile indexes + per-tile representatives from coords alone.
+
+    Returns {z: (order, keys, starts, rep_ids)} — the same tuple shape the
+    server holds in Dataset.tiles[z]. Pure/in-memory, so it serves both the
+    build (persisted) and ephemeral relayouts (e.g. semantic-axis scatter)."""
     n = len(xy)
     xy64 = xy.astype(np.float64)
     rep64 = rep.astype(np.float64)
+    out = {}
     for z in range(max_zoom + 1):
         side = 1 << z
         tx = np.minimum((xy[:, 0] * side).astype(np.int64), side - 1)
@@ -182,8 +188,14 @@ def write_tile_indexes(points_dir: Path, xy: np.ndarray, rep: np.ndarray, max_zo
             samp = summarize.sample(order[starts[i] : starts[i + 1]])
             j = summarize.pick_representative(xy64[samp], rep64[samp], tile_size)
             rep_ids[i] = samp[j]
+        out[z] = (order, keys.astype(np.uint32), starts, rep_ids)
+    return out
+
+
+def write_tile_indexes(points_dir: Path, xy: np.ndarray, rep: np.ndarray, max_zoom: int) -> None:
+    for z, (order, keys, starts, rep_ids) in compute_tile_indexes(xy, rep, max_zoom).items():
         np.save(points_dir / f"z{z}_order.npy", order)
-        np.save(points_dir / f"z{z}_keys.npy", keys.astype(np.uint32))
+        np.save(points_dir / f"z{z}_keys.npy", keys)
         np.save(points_dir / f"z{z}_starts.npy", starts)
         np.save(points_dir / f"z{z}_rep.npy", rep_ids)
 

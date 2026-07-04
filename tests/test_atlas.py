@@ -52,7 +52,37 @@ def build_fixture(root: Path) -> Path:
     return out
 
 
+def add_embeddings(root: Path, dim: int = 4) -> None:
+    """Give the bundle synthetic per-color unit embeddings so axis tests need no
+    model download: image i's vector is basis e_(i%4) + tiny noise, normalized."""
+    rng = np.random.default_rng(0)
+    E = np.zeros((N_IMAGES, dim), np.float32)
+    for i in range(N_IMAGES):
+        E[i, i % len(COLORS)] = 1.0
+        E[i] += 0.01 * rng.standard_normal(dim).astype(np.float32)
+    E /= np.linalg.norm(E, axis=1, keepdims=True)
+    (root / "search").mkdir(exist_ok=True)
+    np.save(root / "search" / "embeddings.npy", E.astype(np.float16))
+    mpath = root / "manifest.json"
+    m = json.loads(mpath.read_text())
+    m["search"] = {"model": "dummy", "dim": dim}
+    mpath.write_text(json.dumps(m))
+
+
 class TestUnits(unittest.TestCase):
+    def test_compute_tile_indexes_matches_written(self):
+        rng = np.random.default_rng(3)
+        xy = rng.random((200, 2)).astype(np.float32)
+        rep = rng.random(200).astype(np.float32)
+        idx = build.compute_tile_indexes(xy, rep, 3)
+        with tempfile.TemporaryDirectory() as td:
+            build.write_tile_indexes(Path(td), xy, rep, 3)
+            for z, (order, keys, starts, reps) in idx.items():
+                np.testing.assert_array_equal(order, np.load(Path(td) / f"z{z}_order.npy"))
+                np.testing.assert_array_equal(keys, np.load(Path(td) / f"z{z}_keys.npy"))
+                np.testing.assert_array_equal(starts, np.load(Path(td) / f"z{z}_starts.npy"))
+                np.testing.assert_array_equal(reps, np.load(Path(td) / f"z{z}_rep.npy"))
+
     def test_tile_index_matches_bruteforce(self):
         rng = np.random.default_rng(7)
         xy = rng.random((500, 2)).astype(np.float32)
@@ -276,6 +306,86 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIsNone(self.ds.image_info(N_IMAGES))
         preview = self.ds.root / info["preview_url"].lstrip("/")
         self.assertTrue(preview.is_file())
+
+
+class TestAxis(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="atlas-axis-"))
+        root = cls.tmp / "axis"
+        shutil.copytree(build_fixture(cls.tmp), root)
+        add_embeddings(root)
+        cls.ds = Dataset(root)
+        cls.red = [i for i in range(N_IMAGES) if i % 4 == 0]
+        cls.green = [i for i in range(N_IMAGES) if i % 4 == 1]
+        cls.blue = [i for i in range(N_IMAGES) if i % 4 == 2]
+        cls.yellow = [i for i in range(N_IMAGES) if i % 4 == 3]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.ds.close()
+        shutil.rmtree(cls.tmp)
+
+    def test_has_axis(self):
+        self.assertTrue(self.ds.has_axis)
+
+    def test_overlay_scores_and_tint(self):
+        tok, rec = self.ds.make_axis(
+            {"a": {"ids": self.red}, "b": {"ids": self.blue}}, None, "all")
+        self.assertEqual(rec["mode"], "overlay")
+        norm = rec["x"]["norm"]
+        self.assertGreater(float(norm[self.red].mean()), 0.8)    # end A high
+        self.assertLess(float(norm[self.blue].mean()), 0.2)      # end B low
+        r = self.ds.viewport(6, 0, 0, 1, 1, "all", tok)          # z6: every image an item
+        self.assertTrue(r["items"])
+        for it in r["items"]:
+            self.assertTrue(0.0 <= it["score"] <= 1.0)
+            self.assertAlmostEqual(it["score"], float(norm[it["id"]]), places=4)
+
+    def test_union_of_sources_end(self):
+        # an end defined by a token (e.g. a lasso/filter group) behaves like its ids
+        ftok, _ = self.ds.make_filter("color = 'red'")
+        _, rec = self.ds.make_axis(
+            {"a": {"tokens": [ftok]}, "b": {"ids": self.blue}}, None, "all")
+        self.assertGreater(float(rec["x"]["norm"][self.red].mean()), 0.8)
+
+    def test_scatter_layout_and_quadrants(self):
+        tok, rec = self.ds.make_axis(
+            {"a": {"ids": self.red}, "b": {"ids": self.blue}},
+            {"a": {"ids": self.green}, "b": {"ids": self.yellow}}, "all")
+        self.assertEqual(rec["mode"], "scatter")
+        axy = rec["layout"]["xy"]
+        self.assertEqual(axy.shape, (N_IMAGES, 2))
+        # end A (red) → high X (right); end B (blue) → low X (left)
+        self.assertGreater(axy[self.red].mean(0)[0], axy[self.blue].mean(0)[0])
+        # Y is inverted so end A (green) is at the TOP (small world-y)
+        self.assertLess(axy[self.green].mean(0)[1], axy[self.yellow].mean(0)[1])
+        r = self.ds.viewport(6, 0, 0, 1, 1, "all", tok)          # served from axis tiles
+        self.assertTrue(r["items"])
+        for it in r["items"]:
+            self.assertTrue(0.0 <= it["x"] <= 1.0 and 0.0 <= it["y"] <= 1.0)
+            self.assertNotIn("score", it)                        # no tint in scatter
+        # drill-down reads the axis tiling too
+        agg = self.ds.viewport(2, 0, 0, 1, 1, "all", tok)["aggregates"]
+        if agg:
+            m = self.ds.tile_members(2, agg[0]["tx"], agg[0]["ty"], "all", 0, 500, tok)
+            self.assertGreater(m["total"], 0)
+
+    def test_export_axis_columns(self):
+        stok, rec = self.ds.make_axis(
+            {"a": {"ids": self.red}, "b": {"ids": self.blue}},
+            {"a": {"ids": self.green}, "b": {"ids": self.yellow}}, "all")
+        head = self.ds.export_csv("all", stok).decode().splitlines()
+        self.assertIn("axis_x", head[0])
+        self.assertIn("axis_y", head[0])
+        self.assertIn("quadrant", head[0])
+        self.assertEqual(len(head) - 1, N_IMAGES)
+        # overlay export carries axis_x but not axis_y
+        otok, _ = self.ds.make_axis(
+            {"a": {"ids": self.red}, "b": {"ids": self.blue}}, None, "all")
+        ohead = self.ds.export_csv("all", otok).decode().splitlines()[0]
+        self.assertIn("axis_x", ohead)
+        self.assertNotIn("axis_y", ohead)
 
 
 if __name__ == "__main__":

@@ -132,6 +132,7 @@ async function doFetch() {
     x1: Math.min(1, x1), y1: Math.min(1, y1),
     token: activeToken(),
   });
+  if (axisToken) params.set("axis", axisToken);
   try {
     const res = await fetch(`/api/viewport?${params}`);
     if (res.status === 410) {        // server restarted: token cache gone
@@ -141,6 +142,7 @@ async function doFetch() {
     if (!res.ok) return;
     const data = await res.json();
     if (seq !== fetchSeq) return;    // stale response
+    data._axis = axisToken || null;  // tag so a layout switch skips the animation
     const prev = scene;
     scene = data;
     setupTransition(prev, data);     // animate stacks splitting / merging on z change
@@ -297,7 +299,8 @@ function sceneMarkers(s) {
 function setupTransition(prev, next) {
   if (animRAF) { cancelAnimationFrame(animRAF); animRAF = 0; }
   anim = null;
-  if (!prev || prev.z === next.z) return;                 // pan / same level: no anim
+  if (!prev || prev._axis !== next._axis) return;         // layout switch: no anim
+  if (prev.z === next.z) return;                          // pan / same level: no anim
   const prevEmpty = !prev.aggregates.length && !prev.items.length;
   const nextEmpty = !next.aggregates.length && !next.items.length;
   if (prevEmpty || nextEmpty) return;                     // first paint / cleared: no anim
@@ -369,14 +372,15 @@ function render() {
   const [bx0, by0] = worldToScreen(0, 0);
   const [bx1, by1] = worldToScreen(1, 1);
 
+  const scatter = axisMode === "scatter";   // axis plane replaces the UMAP layout
   // density underlay (backmost): soft raster glow + crisp vector contour lines
-  if (showDensity && densityImg) {
+  if (showDensity && densityImg && !scatter) {
     ctx.globalAlpha = 0.6;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(densityImg, bx0, by0, bx1 - bx0, by1 - by0);
     ctx.globalAlpha = 1;
   }
-  if (showDensity && contours) drawContours();
+  if (showDensity && contours && !scatter) drawContours();
 
   ctx.strokeStyle = "#2a2e38";
   ctx.lineWidth = 1;
@@ -384,10 +388,13 @@ function render() {
 
   markers = [];
   if (anim && anim.dir === "out") drawGhosts();   // outgoing stacks sliding inward
+  const overlay = axisMode === "overlay";
   const itemPx = Math.round(markerPx * 0.7);
   for (const it of scene.items) {
     const a = animMarker(it.x, it.y, itemPx);
-    drawSprite(it.id, a.sx, a.sy, a.size, a.alpha);
+    const rect = drawSprite(it.id, a.sx, a.sy, a.size, a.alpha);
+    if (overlay && it.score != null) outlineByScore(rect, it.score, a.alpha);
+    drawPickRing(rect, it.id);
     const [fx, fy] = worldToScreen(it.x, it.y);   // hit-test at rest position
     markers.push({ x: fx - itemPx / 2, y: fy - itemPx / 2, w: itemPx, h: itemPx,
                    id: it.id, count: 1 });
@@ -396,6 +403,8 @@ function render() {
     const size = markerSizeAgg(ag.count);
     const a = animMarker(ag.x, ag.y, size);
     const rect = drawSprite(ag.id, a.sx, a.sy, a.size, a.alpha);
+    if (overlay && ag.score != null) outlineByScore(rect, ag.score, a.alpha);
+    drawPickRing(rect, ag.id);
     if (a.alpha < 1) ctx.globalAlpha = a.alpha;
     drawBadge(fmtCount(ag.count), rect.x + rect.w - 4, rect.y + 2);
     if (a.alpha < 1) ctx.globalAlpha = 1;
@@ -403,6 +412,7 @@ function render() {
     markers.push({ x: fx - size / 2, y: fy - size / 2, w: size, h: size,
                    id: ag.id, count: ag.count, z: scene.z, tx: ag.tx, ty: ag.ty });
   }
+  if (scatter) drawQuadrants();
   if (lasso && lasso.length > 1) {
     ctx.beginPath();
     ctx.moveTo(lasso[0][0], lasso[0][1]);
@@ -416,10 +426,11 @@ function render() {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (showLabels && labels.length) renderLabels();
+  if (showLabels && labels.length && axisMode !== "scatter") renderLabels();
   hud.textContent =
     `z${scene.z} · ${scene.aggregates.length} aggregates · ${scene.items.length} items`;
   renderContents();   // repaint the side-panel grid as sprite strips arrive
+  if (axisMode === "overlay" && axisToken) renderAxisStrip();   // strip fills in too
 }
 
 /* ----------------------------------------------------------- interaction */
@@ -455,6 +466,10 @@ window.addEventListener("mouseup", (e) => {
   if (!dragMoved) {                       // click
     const rect = canvas.getBoundingClientRect();
     const m = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (axisPickSlot) {                    // picking images for an axis end
+      if (m) togglePick(axisPickSlot, m.id);
+      return;
+    }
     pinnedId = m && m.id !== pinnedId ? m.id : null;
     if (m && pinnedId !== null && m.count > 1) openTileContents(m);
     else closeContents();
@@ -583,6 +598,7 @@ async function loadMoreContents() {
     z: contents.z, tx: contents.tx, ty: contents.ty,
     token: activeToken(), offset: contents.ids.length, limit: GRID_PAGE,
   });
+  if (axisToken) params.set("axis", axisToken);
   const res = await fetch(`/api/tile?${params}`);
   if (!res.ok || !contents) return;
   const d = await res.json();
@@ -874,6 +890,272 @@ filterInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); applyFilter(); }
 });
 
+/* ------------------------------------------------------------ semantic axes
+ * Define an A↔B direction in CLIP embedding space (by text, hand-picked images,
+ * or lasso groups). One axis tints the map + fills a spectrum strip; two axes
+ * relayout the map into a quadrant plot. All scoring is a matvec server-side.
+ */
+let axisToken = null;
+let axisMode = null;        // "overlay" | "scatter"
+let axisPayload = null;     // server response: {labels, divX, divY, stats, spectrum}
+let axisPickSlot = null;    // "xa"|"xb"|"ya"|"yb" while picking images on the map
+const mkBasket = () => ({ ids: new Set(), tokens: [] });
+const axisBaskets = { xa: mkBasket(), xb: mkBasket(), ya: mkBasket(), yb: mkBasket() };
+const AXIS_SLOTS = { x: ["xa", "xb"], y: ["ya", "yb"] };
+const SLOT_DEFAULT = { xa: "A", xb: "B", ya: "C", yb: "D" };
+
+// diverging colour ramp: 0 = end B (blue) · 0.5 = neutral · 1 = end A (red)
+function divergingColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const A = [59, 111, 214], M = [130, 134, 150], B = [214, 75, 59];
+  const mix = (u, v, k) => Math.round(u + (v - u) * k);
+  const c = t < 0.5 ? A.map((v, i) => mix(v, M[i], t * 2))
+                    : M.map((v, i) => mix(v, B[i], (t - 0.5) * 2));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+// Overlay mode: a coloured ring just inside the thumbnail's edge (no fill), so
+// the image stays fully visible and the axis reads as an outline colour.
+function outlineByScore(rect, score, alpha) {
+  ctx.globalAlpha = alpha ?? 1;
+  ctx.strokeStyle = divergingColor(score);
+  ctx.lineWidth = 2.5;
+  ctx.strokeRect(rect.x + 1.5, rect.y + 1.5, rect.w - 3, rect.h - 3);
+  ctx.globalAlpha = 1;
+}
+function drawPickRing(rect, id) {
+  if (!axisPickSlot || !axisBaskets[axisPickSlot].ids.has(id)) return;
+  ctx.strokeStyle = "#ffd166";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(rect.x - 1, rect.y - 1, rect.w + 2, rect.h + 2);
+}
+
+// Quadrant crosshair + the four end-labels at the plane edges (scatter mode).
+function drawQuadrants() {
+  const { w, h } = cssSize();
+  const dx = axisPayload && axisPayload.divX != null ? axisPayload.divX : 0.5;
+  const dy = axisPayload && axisPayload.divY != null ? axisPayload.divY : 0.5;
+  const sx = worldToScreen(dx, 0)[0];
+  const sy = worldToScreen(0, dy)[1];
+  ctx.strokeStyle = "rgba(232,236,244,.35)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
+  ctx.setLineDash([]);
+  const L = axisPayload && axisPayload.labels;
+  if (!L) return;
+  ctx.font = "600 13px system-ui, sans-serif";
+  const edge = (text, x, y, align, baseline) => {
+    if (!text) return;
+    ctx.textAlign = align; ctx.textBaseline = baseline;
+    ctx.lineWidth = 3; ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(8,9,13,.85)";
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = "#eef1f8";
+    ctx.fillText(text, x, y);
+  };
+  edge(L.x && L.x.a, w - 10, h / 2, "right", "middle");   // high X → right
+  edge(L.x && L.x.b, 10, h / 2, "left", "middle");
+  edge(L.y && L.y.a, w / 2, 8, "center", "top");          // high Y → top
+  edge(L.y && L.y.b, w / 2, h - 8, "center", "bottom");
+}
+
+const endEl = (slot) => document.querySelector(`.axis-end[data-slot="${slot}"]`);
+const endText = (slot) => endEl(slot).querySelector(".axis-text").value.trim();
+const slotName = (slot) => endText(slot) || SLOT_DEFAULT[slot];
+function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function setAxisStatus(msg, err) {
+  const el = document.getElementById("axis-status");
+  el.textContent = msg || "";
+  el.classList.toggle("err", !!err);
+}
+
+function buildEndRows() {
+  for (const [axis, slots] of Object.entries(AXIS_SLOTS)) {
+    const container = document.getElementById(`axis-${axis}`);
+    for (const slot of slots) {
+      const div = document.createElement("div");
+      div.className = "axis-end";
+      div.dataset.slot = slot;
+      div.innerHTML =
+        `<input class="axis-text" type="text" ` +
+          `placeholder="End ${SLOT_DEFAULT[slot]}: type a description, or pick images →">` +
+        `<div class="axis-tools">` +
+          `<button class="axis-pick secondary" type="button">pick</button>` +
+          `<button class="axis-addsel secondary" type="button">+ selection</button>` +
+          `<button class="axis-clearend secondary" type="button">clear</button>` +
+          `<span class="axis-count muted"></span></div>`;
+      container.appendChild(div);
+      div.querySelector(".axis-pick").addEventListener("click", () => togglePickSlot(slot));
+      div.querySelector(".axis-addsel").addEventListener("click", () => addSelectionToEnd(slot));
+      div.querySelector(".axis-clearend").addEventListener("click", () => clearEnd(slot));
+      div.querySelector(".axis-text").addEventListener("input", () => updateEndCount(slot));
+    }
+  }
+}
+
+function togglePickSlot(slot) {
+  axisPickSlot = axisPickSlot === slot ? null : slot;
+  for (const b of document.querySelectorAll(".axis-pick")) b.classList.remove("picking");
+  if (axisPickSlot) {
+    endEl(axisPickSlot).querySelector(".axis-pick").classList.add("picking");
+    setAxisStatus(`Picking for End ${SLOT_DEFAULT[slot]} — click images (pan freely across the map); click again to remove.`);
+  } else {
+    setAxisStatus("");
+  }
+  requestRender();
+}
+function togglePick(slot, id) {
+  const b = axisBaskets[slot];
+  if (b.ids.has(id)) b.ids.delete(id); else b.ids.add(id);
+  updateEndCount(slot);
+  requestRender();
+}
+function addSelectionToEnd(slot) {
+  if (!selection) { setAxisStatus("Lasso a group first (Shift-drag), then add it.", true); return; }
+  const b = axisBaskets[slot];
+  if (!b.tokens.includes(selection.token)) b.tokens.push(selection.token);
+  updateEndCount(slot);
+  setAxisStatus(`Added ${selection.count.toLocaleString()} images to End ${SLOT_DEFAULT[slot]}.`);
+}
+function clearEnd(slot) {
+  axisBaskets[slot] = mkBasket();
+  endEl(slot).querySelector(".axis-text").value = "";
+  updateEndCount(slot);
+  requestRender();
+}
+function updateEndCount(slot) {
+  const el = endEl(slot).querySelector(".axis-count");
+  if (endText(slot)) { el.textContent = "text"; return; }
+  const b = axisBaskets[slot];
+  const parts = [];
+  if (b.ids.size) parts.push(`${b.ids.size} picked`);
+  if (b.tokens.length) parts.push(`${b.tokens.length} group${b.tokens.length > 1 ? "s" : ""}`);
+  el.textContent = parts.join(" + ");
+}
+function endSpec(slot) {
+  const txt = endText(slot);
+  if (txt) return { text: txt, label: txt };
+  const b = axisBaskets[slot];
+  if (b.ids.size || b.tokens.length)
+    return { ids: [...b.ids], tokens: b.tokens.slice(), label: slotName(slot) };
+  return null;
+}
+
+function resetView() { view = { cx: 0.5, cy: 0.5, upp: uppFit }; }
+
+async function buildAxis() {
+  const xa = endSpec("xa");
+  if (!xa) { setAxisStatus("Axis 1 needs at least End A.", true); return; }
+  const body = { x: { a: xa, b: endSpec("xb") }, base_token: filterToken };
+  const ya = endSpec("ya");
+  if (ya) body.y = { a: ya, b: endSpec("yb") };
+  axisPickSlot = null;
+  for (const b of document.querySelectorAll(".axis-pick")) b.classList.remove("picking");
+  setAxisStatus("Building…");
+  try {
+    const res = await fetch("/api/axis", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { setAxisStatus(data.error || "axis failed", true); return; }
+    axisToken = data.token;
+    axisMode = data.mode;
+    axisPayload = data;
+    if (axisMode === "scatter") resetView();
+    updateAxisChrome();
+    scheduleFetch(true);
+  } catch (e) { setAxisStatus("server unreachable", true); }
+}
+function clearAxis() {
+  const wasScatter = axisMode === "scatter";
+  axisToken = null; axisMode = null; axisPayload = null;
+  updateAxisChrome();
+  if (wasScatter) resetView();
+  scheduleFetch(true);
+}
+
+function updateAxisChrome() {
+  const strip = document.getElementById("axis-strip");
+  const legend = document.getElementById("axis-legend");
+  document.getElementById("axis-export").classList.toggle("hidden", !axisToken);
+  if (!axisToken) {
+    strip.classList.add("hidden");
+    legend.classList.add("hidden");
+    setAxisStatus("");
+    return;
+  }
+  const L = axisPayload.labels;
+  if (axisMode === "overlay") {
+    legend.classList.remove("hidden");
+    legend.innerHTML =
+      `<span>${escapeHtml(L.x.b)}</span><span class="bar"></span><span>${escapeHtml(L.x.a)}</span>`;
+    document.getElementById("axis-strip-a").textContent = L.x.a;
+    document.getElementById("axis-strip-b").textContent = L.x.b;
+    strip.classList.remove("hidden");
+    renderAxisStrip();
+    setAxisStatus("Overlay: thumbnails outlined by the axis; strip shows the A↔B range.");
+  } else {
+    legend.classList.add("hidden");
+    strip.classList.add("hidden");
+    setAxisStatus("Quadrant plot: X and Y are your two axes. Drag/zoom as usual.");
+  }
+}
+
+// Spectrum strip: the k representative thumbnails placed left→right by score.
+function renderAxisStrip() {
+  const spec = (axisPayload && axisPayload.spectrum) || [];
+  if (!spec.length) return;
+  ensureSprites(spec.map((s) => s.id));
+  const cv = document.getElementById("axis-strip-canvas");
+  const rectW = cv.clientWidth || 300, rectH = cv.clientHeight || 52;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(rectW * dpr)) cv.width = Math.round(rectW * dpr);
+  if (cv.height !== Math.round(rectH * dpr)) cv.height = Math.round(rectH * dpr);
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, rectW, rectH);
+  const cell = manifest.sprite_cell;
+  const sz = rectH - 4;
+  for (const s of spec) {
+    const x = 2 + s.pos * (rectW - sz - 4), y = 2;
+    const e = spriteCache.get(s.id);
+    if (e && e.img) g.drawImage(e.img, e.sx, e.sy, cell, cell, x, y, sz, sz);
+    else { g.fillStyle = "#2b2f38"; g.fillRect(x, y, sz, sz); }
+    g.strokeStyle = "rgba(0,0,0,.5)"; g.lineWidth = 1;
+    g.strokeRect(x + 0.5, y + 0.5, sz - 1, sz - 1);
+  }
+}
+
+function initAxis() {
+  buildEndRows();
+  document.getElementById("axis-build").addEventListener("click", buildAxis);
+  document.getElementById("axis-clear").addEventListener("click", clearAxis);
+  document.getElementById("axis-export").addEventListener("click", async () => {
+    if (!axisToken) return;
+    const res = await fetch(`/api/export?token=${activeToken()}&axis=${axisToken}`);
+    if (!res.ok) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = "atlas-axis.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  document.getElementById("axis-strip-canvas").addEventListener("click", (e) => {
+    const spec = axisPayload && axisPayload.spectrum;
+    if (!spec || !spec.length) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width;
+    let best = spec[0], bd = Infinity;
+    for (const s of spec) { const d = Math.abs(s.pos - px); if (d < bd) { bd = d; best = s; } }
+    pinnedId = best.id;
+    updateDetail(best.id);
+    requestRender();
+  });
+  document.getElementById("axis-box").classList.remove("hidden");
+}
+
 /* ----------------------------------------------------- labels & density UI */
 
 function wireToggle(id, rowId, get, set) {
@@ -919,6 +1201,7 @@ async function init() {
   uppFit = 1.1 / Math.min(w, h);
   view = { cx: 0.5, cy: 0.5, upp: uppFit };
   if (manifest.has_search) document.getElementById("search-box").classList.remove("hidden");
+  if (manifest.has_axis) initAxis();
   loadColumns();
   loadLabelsAndDensity();
   requestRender();

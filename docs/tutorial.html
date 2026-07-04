@@ -256,6 +256,28 @@ atlas ocr DATASET --lang en</code></pre>
   current filtered set.
 </p>
 
+<h3 id="axes">3.8 Semantic axes (optional)</h3>
+<p>
+  With CLIP embeddings present, an <strong>Axis</strong> panel appears. It lets
+  you sort the whole collection along a direction you define, reusing the
+  embeddings you already have (no re-embedding — just a dot product).
+</p>
+<ul>
+  <li><strong>Define each end</strong> by typing a phrase, clicking
+    <em>pick</em> and tapping images on the map (pan freely — the group can be
+    scattered), or lassoing a group and pressing <em>+&nbsp;selection</em>.
+    An end can combine several picks and groups.</li>
+  <li><strong>One axis (End A / End B of Axis 1)</strong> tints every thumbnail
+    from blue (B) to red (A) and shows a <em>spectrum strip</em> of
+    representative images across the range.</li>
+  <li><strong>Two axes</strong> (fill Axis 2 as well) turn the map into a
+    <em>quadrant plot</em>: X and Y are your two axes, with a crosshair and the
+    four end-labels at the edges. Pan, zoom and open stacks exactly as usual.</li>
+  <li><strong>Export coords</strong> writes a CSV with an <code>axis_x</code>
+    column (plus <code>axis_y</code> and a <code>quadrant</code> label in
+    two-axis mode), respecting any active filter or selection.</li>
+</ul>
+
 <h2 id="looking">4. What you are looking at</h2>
 <p>
   When the viewer opens you see a dark square — the <strong>map</strong> —

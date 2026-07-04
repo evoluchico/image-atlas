@@ -10,6 +10,11 @@
 <main id="map-wrap">
   <canvas id="map"></canvas>
   <div id="hud"></div>
+  <div id="axis-strip" class="hidden">
+    <span class="axis-strip-label" id="axis-strip-b"></span>
+    <canvas id="axis-strip-canvas"></canvas>
+    <span class="axis-strip-label" id="axis-strip-a"></span>
+  </div>
 </main>
 <aside id="panel">
   <header>
@@ -27,6 +32,24 @@
     </div>
     <label class="toggle" id="exact-row"><input type="checkbox" id="search-exact">
       Exact text only (OCR)</label>
+  </section>
+  <section id="axis-box" class="hidden">
+    <details id="axis-details">
+      <summary class="muted">Semantic axis — project images between two ends</summary>
+      <div class="axis-body">
+        <div id="axis-x" class="axis-row"><div class="axis-title">Axis 1 (X)</div></div>
+        <div id="axis-y" class="axis-row">
+          <div class="axis-title">Axis 2 (Y) <span class="muted">— optional → quadrant plot</span></div>
+        </div>
+        <div class="filter-row">
+          <button id="axis-build">Build</button>
+          <button id="axis-clear" class="secondary">Clear</button>
+          <button id="axis-export" class="secondary hidden">Export coords</button>
+        </div>
+        <div id="axis-status" class="muted"></div>
+        <div id="axis-legend" class="hidden"></div>
+      </div>
+    </details>
   </section>
   <section id="filter-box">
     <label>Filters</label>

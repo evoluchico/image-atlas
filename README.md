@@ -148,6 +148,18 @@ compose with the filters (search *within* the current filtered set), and
 the result drives the map like any filter. CLIP search must be served
 from an env with the `[search]` extra installed.
 
+### Semantic axes (optional)
+
+When a bundle has CLIP embeddings, an **Axis** panel lets you define a
+direction and see where every image falls along it — no re-embedding, just
+a dot product against vectors you already have. Define each end by typing a
+phrase ("crowded street" ↔ "empty landscape"), by hand-**pick**ing images on
+the map, or by adding lasso **groups** — which can be spatially scattered, not
+just one contiguous region. Define **one** axis to tint the map A↔B and get a
+spectrum strip of the range; define **two** to turn the map into a **quadrant
+plot** (X vs Y), then **Export coords** to a CSV with `axis_x`/`axis_y` and a
+`quadrant` label (honoring any active filter/selection).
+
 Throughput is roughly limited by image decoding: ~400k images take
 ~20 min with 24 workers on a fast machine.
 

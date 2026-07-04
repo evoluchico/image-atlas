@@ -166,6 +166,7 @@ class Dataset:
 
         self._filters: OrderedDict[str, tuple] = OrderedDict()  # token -> (mask, count, where)
         self._grid_cache: dict[str, list] = {}   # search token -> top ranked ids
+        self._axes: OrderedDict[str, dict] = OrderedDict()  # axis token -> record
         self._lock = threading.Lock()
 
         # optional search: CLIP text->image and/or OCR full-text
@@ -176,6 +177,8 @@ class Dataset:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ocr'"
             ).fetchone())
         self.has_search = bool(self.search_cfg) or self.has_ocr
+        # semantic axes need the image embeddings (not just OCR)
+        self.has_axis = bool(self.search_cfg)
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
@@ -337,10 +340,7 @@ class Dataset:
         pool = max(k * 4, 2000)
         scores: dict[int, float] = {}
         if self.search_cfg:
-            if self._searcher is None:
-                from .search import TextSearcher
-                self._searcher = TextSearcher(self.root, self.search_cfg["model"])
-            ranked, _ = self._searcher.rank(query)
+            ranked, _ = self._ensure_searcher().rank(query)
             rank = 0
             for i in ranked.tolist():
                 if keep(i):
@@ -360,6 +360,120 @@ class Dataset:
         with self._lock:
             self._grid_cache[token] = grid
         return tok, count, grid, False
+
+    # --------------------------------------------------------- semantic axes
+
+    def _ensure_searcher(self):
+        if self._searcher is None:
+            if not self.search_cfg:
+                raise DatasetError("this dataset has no image embeddings")
+            from .search import TextSearcher
+            self._searcher = TextSearcher(self.root, self.search_cfg["model"])
+        return self._searcher
+
+    def _end_ids(self, spec: dict) -> np.ndarray:
+        """Union of a text-free end's sources: hand-picked ids + token masks."""
+        ids: set[int] = {int(i) for i in spec.get("ids", []) if 0 <= int(i) < self.n}
+        for t in spec.get("tokens", []):
+            m = self.get_mask(t)             # may raise KeyError (unknown token)
+            if m is None:
+                ids.update(range(self.n))    # 'all' token
+            else:
+                ids.update(int(i) for i in np.flatnonzero(m))
+        return np.fromiter(ids, dtype=np.int64)
+
+    def _end_vector(self, spec: dict) -> np.ndarray:
+        """Resolve one axis end to a unit vector in embedding space."""
+        if spec.get("text"):
+            v = self._ensure_searcher().encode_texts([spec["text"]])[0]
+        else:
+            E = self._ensure_searcher().ensure_matrix()
+            idx = self._end_ids(spec)
+            if not len(idx):
+                raise ValueError("axis end is empty")
+            rows = E[idx]
+            rows = rows[np.linalg.norm(rows, axis=1) > 0]   # drop missing embeddings
+            if not len(rows):
+                raise ValueError("axis end has no embedded images")
+            v = rows.mean(axis=0)
+        n = np.linalg.norm(v)
+        return v / (n if n else 1.0)
+
+    @staticmethod
+    def _has_end(spec) -> bool:
+        return bool(spec) and bool(spec.get("text") or spec.get("ids") or spec.get("tokens"))
+
+    def make_axis(self, x_spec: dict, y_spec: dict | None, base_token: str) -> tuple[str, dict]:
+        """Build a 1- or 2-axis projection over the embeddings. Cached by token.
+        overlay (x only): per-image normalized score for map tint + spectrum.
+        scatter (x and y): an ephemeral (sX, sY) layout tiled like the main map."""
+        base = self.get_mask(base_token)     # None = all; may raise KeyError
+        E = self._ensure_searcher().ensure_matrix()
+        baseidx = slice(None) if base is None else np.flatnonzero(base)
+
+        def one_axis(pair: dict) -> dict:
+            a = self._end_vector(pair["a"])
+            if self._has_end(pair.get("b")):
+                b = self._end_vector(pair["b"])
+                d, mid, two = a - b, (a + b) / 2.0, True
+            else:
+                d, mid, two = a.copy(), None, False
+            nd = np.linalg.norm(d)
+            d = d / (nd if nd else 1.0)
+            s = (E @ d).astype(np.float32)
+            p2, p98 = (float(v) for v in np.percentile(s[baseidx], [2, 98]))
+            rng = (p98 - p2) or 1.0
+            norm = np.clip((s - p2) / rng, 0.0, 1.0).astype(np.float32)
+            div = float(np.clip((float(mid @ d) - p2) / rng, 0.0, 1.0)) if two else None
+            return {"norm": norm, "p2": p2, "p98": p98, "div": div}
+
+        xr = one_axis(x_spec)
+        yr = one_axis(y_spec) if self._has_end((y_spec or {}).get("a")) else None
+        record = {"mode": "scatter" if yr else "overlay", "x": xr, "y": yr}
+        if yr:
+            from . import build
+            # invert Y so the high-score end (A/C) is at the TOP of the screen
+            axy = np.column_stack([xr["norm"], 1.0 - yr["norm"]]).astype(np.float32)
+            record["layout"] = {
+                "xy": axy,
+                "tiles": build.compute_tile_indexes(axy, np.asarray(self.rep), self.zmax),
+            }
+        token = "ax" + hashlib.sha1(
+            repr([x_spec, y_spec, base_token]).encode()).hexdigest()[:11]
+        with self._lock:
+            self._axes[token] = record
+            while len(self._axes) > 4:      # each scatter layout is ~tens of MB
+                self._axes.popitem(last=False)
+        return token, record
+
+    def get_axis(self, token: str) -> dict | None:
+        if not token:
+            return None
+        with self._lock:
+            rec = self._axes.get(token)
+            if rec:
+                self._axes.move_to_end(token)
+            return rec
+
+    def axis_spectrum(self, record: dict, base_token: str, k: int = 24) -> list:
+        """Overlay only: one best-thumbnail representative per score bin, A->B."""
+        norm = record["x"]["norm"]
+        base = self.get_mask(base_token)
+        idx = np.arange(self.n) if base is None else np.flatnonzero(base)
+        if not len(idx):
+            return []
+        rep = np.asarray(self.rep)
+        edges = np.linspace(0.0, 1.0, k + 1)
+        out = []
+        for bi in range(k):
+            lo, hi = edges[bi], edges[bi + 1]
+            inb = (norm[idx] >= lo) & ((norm[idx] < hi) if bi < k - 1 else (norm[idx] <= hi))
+            cand = idx[inb]
+            if not len(cand):
+                continue
+            best = int(cand[np.argmax(rep[cand])])
+            out.append({"id": best, "pos": float((lo + hi) / 2)})
+        return out
 
     def make_selection(self, polygon, base_token: str) -> tuple[str, int]:
         poly = np.asarray(polygon, dtype=np.float64)
@@ -391,21 +505,39 @@ class Dataset:
                 self._filters.popitem(last=False)
         return token, count
 
-    def export_csv(self, token: str) -> bytes:
+    def export_csv(self, token: str, axis_token: str = ALL_TOKEN) -> bytes:
         mask = self.get_mask(token)  # may raise KeyError
+        axis = self.get_axis(axis_token)
+        extra = ["x", "y"]
+        if axis is not None:
+            extra.append("axis_x")
+            if axis["mode"] == "scatter":
+                extra += ["axis_y", "quadrant"]
+        xnorm = axis["x"]["norm"] if axis is not None else None
+        ynorm = axis["y"]["norm"] if (axis is not None and axis["mode"] == "scatter") else None
+        divx = (axis["x"]["div"] if axis is not None else None)
+        divx = 0.5 if divx is None else divx
+        divy = (axis["y"]["div"] if ynorm is not None else None)
+        divy = 0.5 if divy is None else divy
         buf = io.StringIO()
         writer = csv.writer(buf)
         con = self._connect()
         try:
             cur = con.execute("SELECT * FROM images ORDER BY id")
-            writer.writerow([d[0] for d in cur.description] + ["x", "y"])
+            writer.writerow([d[0] for d in cur.description] + extra)
             xy = self.xy
             for row in cur:
                 img_id = row[0]
-                if mask is None or mask[img_id]:
-                    writer.writerow(
-                        list(row) + [f"{xy[img_id, 0]:.6f}", f"{xy[img_id, 1]:.6f}"]
-                    )
+                if not (mask is None or mask[img_id]):
+                    continue
+                cells = list(row) + [f"{xy[img_id, 0]:.6f}", f"{xy[img_id, 1]:.6f}"]
+                if xnorm is not None:
+                    cells.append(f"{float(xnorm[img_id]):.6f}")
+                if ynorm is not None:
+                    nx, ny = float(xnorm[img_id]), float(ynorm[img_id])
+                    quad = ("x+" if nx >= divx else "x-") + " " + ("y+" if ny >= divy else "y-")
+                    cells += [f"{ny:.6f}", quad]
+                writer.writerow(cells)
         finally:
             con.close()
         return buf.getvalue().encode()
@@ -422,9 +554,19 @@ class Dataset:
 
     # ---------------------------------------------------------- viewport
 
-    def viewport(self, z: int, x0: float, y0: float, x1: float, y1: float, token: str) -> dict:
+    def viewport(self, z: int, x0: float, y0: float, x1: float, y1: float,
+                 token: str, axis_token: str = ALL_TOKEN) -> dict:
         mask = self.get_mask(token)
         z = max(self.zmin, min(self.zmax, z))
+
+        # A scatter axis relayout swaps in its own coords + tiles; an overlay
+        # axis keeps the map layout but tints markers by a per-image score.
+        axis = self.get_axis(axis_token)
+        scatter = axis is not None and axis["mode"] == "scatter"
+        tiles_by_z = axis["layout"]["tiles"] if scatter else self.tiles
+        xy = axis["layout"]["xy"] if scatter else self.xy
+        rep = self.rep
+        score = axis["x"]["norm"] if (axis is not None and not scatter) else None
 
         def span(zz):
             side = 1 << zz
@@ -439,18 +581,18 @@ class Dataset:
             z -= 1
             tx0, tx1, ty0, ty1 = span(z)
 
-        order, keys, starts, tile_reps = self.tiles[z]
+        order, keys, starts, tile_reps = tiles_by_z[z]
         side = 1 << z
         tile_size = 1.0 / side
-        xy, rep = self.xy, self.rep
         aggregates, items = [], []
 
         def emit_items(ids):
             pos = xy[ids]
-            items.extend(
-                {"id": int(s), "x": float(px), "y": float(py)}
-                for s, (px, py) in zip(ids.tolist(), pos.tolist())
-            )
+            for s, (px, py) in zip(ids.tolist(), pos.tolist()):
+                it = {"id": int(s), "x": float(px), "y": float(py)}
+                if score is not None:
+                    it["score"] = float(score[s])
+                items.append(it)
 
         for ty in range(ty0, ty1 + 1):
             base = ty * side
@@ -466,10 +608,11 @@ class Dataset:
                         emit_items(np.asarray(order[s0:s1]))
                         continue
                     rid = int(tile_reps[i])
-                    aggregates.append(
-                        {"tx": key % side, "ty": key // side, "count": cnt,
-                         "id": rid, "x": float(xy[rid, 0]), "y": float(xy[rid, 1])}
-                    )
+                    ag = {"tx": key % side, "ty": key // side, "count": cnt,
+                          "id": rid, "x": float(xy[rid, 0]), "y": float(xy[rid, 1])}
+                    if score is not None:
+                        ag["score"] = float(score[order[s0:s1]].mean())
+                    aggregates.append(ag)
                     continue
                 members = order[s0:s1]
                 surv = members[mask[members]]
@@ -483,19 +626,23 @@ class Dataset:
                 pos = np.asarray(xy[samp], dtype=np.float64)
                 w = np.asarray(rep[samp], dtype=np.float64)
                 best = summarize.pick_representative(pos, w, tile_size)
-                aggregates.append(
-                    {"tx": key % side, "ty": key // side, "count": cnt,
-                     "id": int(samp[best]),
-                     "x": float(pos[best][0]), "y": float(pos[best][1])}
-                )
+                ag = {"tx": key % side, "ty": key // side, "count": cnt,
+                      "id": int(samp[best]),
+                      "x": float(pos[best][0]), "y": float(pos[best][1])}
+                if score is not None:
+                    ag["score"] = float(score[surv].mean())
+                aggregates.append(ag)
         return {"z": z, "aggregates": aggregates, "items": items}
 
     def tile_members(self, z: int, tx: int, ty: int, token: str,
-                     offset: int, limit: int) -> dict:
+                     offset: int, limit: int, axis_token: str = ALL_TOKEN) -> dict:
         """Filtered members of one tile, best representatives first."""
         mask = self.get_mask(token)
         z = max(self.zmin, min(self.zmax, z))
-        order, keys, starts, _ = self.tiles[z]
+        axis = self.get_axis(axis_token)
+        tiles_by_z = (axis["layout"]["tiles"]
+                      if axis is not None and axis["mode"] == "scatter" else self.tiles)
+        order, keys, starts, _ = tiles_by_z[z]
         side = 1 << z
         key = ty * side + tx
         i = int(np.searchsorted(keys, key))
@@ -616,7 +763,8 @@ class Handler(BaseHTTPRequestHandler):
             if route in ("/app.js", "/style.css"):
                 return self._file(FRONTEND_DIR / route.lstrip("/"))
             if route == "/api/manifest":
-                return self._json({**self.ds.manifest, "has_search": self.ds.has_search})
+                return self._json({**self.ds.manifest, "has_search": self.ds.has_search,
+                                   "has_axis": self.ds.has_axis})
             if route == "/api/search":
                 q = parse_qs(url.query)
                 mode = "text" if q.get("mode", ["fused"])[0] == "text" else "fused"
@@ -651,6 +799,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.ds.viewport(
                         f("z", int), f("x0"), f("y0"), f("x1"), f("y1"),
                         q.get("token", [ALL_TOKEN])[0],
+                        q.get("axis", [ALL_TOKEN])[0],
                     )
                 except KeyError:
                     return self._error(410, "unknown filter token; re-apply the filter")
@@ -665,6 +814,7 @@ class Handler(BaseHTTPRequestHandler):
                         q.get("token", [ALL_TOKEN])[0],
                         max(0, int(q.get("offset", ["0"])[0])),
                         min(500, max(1, int(q.get("limit", ["60"])[0]))),
+                        q.get("axis", [ALL_TOKEN])[0],
                     )
                 except KeyError as e:
                     if str(e).strip("'") in ("z", "tx", "ty"):
@@ -692,9 +842,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             if route == "/api/export":
-                token = parse_qs(url.query).get("token", [ALL_TOKEN])[0]
+                q = parse_qs(url.query)
+                token = q.get("token", [ALL_TOKEN])[0]
                 try:
-                    body = self.ds.export_csv(token)
+                    body = self.ds.export_csv(token, q.get("axis", [ALL_TOKEN])[0])
                 except KeyError:
                     return self._error(410, "unknown token; re-apply the filter/selection")
                 self.send_response(200)
@@ -718,15 +869,50 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _do_axis(self, payload):
+        if not self.ds.has_axis:
+            return self._error(400, "this dataset has no image embeddings for axes")
+        x = payload.get("x") or {}
+        y = payload.get("y")
+        base = payload.get("base_token", ALL_TOKEN)
+        if not Dataset._has_end((x or {}).get("a")):
+            return self._error(400, "axis X needs at least end A")
+        try:
+            token, rec = self.ds.make_axis(x, y, base)
+        except KeyError:
+            return self._error(410, "unknown selection token; re-apply it")
+        except (ValueError, DatasetError) as e:
+            return self._error(400, str(e))
+        except Exception as e:
+            return self._error(500, f"axis failed: {e}")
+
+        def label(spec, default):
+            return (spec.get("label") or spec.get("text") or default) if spec else None
+
+        labels = {"x": {"a": label(x.get("a"), "A"), "b": label(x.get("b"), "B")}}
+        resp = {"token": token, "mode": rec["mode"], "labels": labels,
+                "divX": rec["x"]["div"], "divY": None}
+        if rec["mode"] == "scatter":
+            labels["y"] = {"a": label((y or {}).get("a"), "C"),
+                           "b": label((y or {}).get("b"), "D")}
+            # world Y is inverted (top = high score), so flip the divider too
+            resp["divY"] = None if rec["y"]["div"] is None else 1.0 - rec["y"]["div"]
+        else:
+            resp["stats"] = {"p2": rec["x"]["p2"], "p98": rec["x"]["p98"]}
+            resp["spectrum"] = self.ds.axis_spectrum(rec, base)
+        return self._json(resp)
+
     def do_POST(self):
         route = urlparse(self.path).path
-        if route not in ("/api/filter", "/api/select"):
+        if route not in ("/api/filter", "/api/select", "/api/axis"):
             return self._error(404, "not found")
         try:
             length = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self._error(400, "body must be JSON")
+        if route == "/api/axis":
+            return self._do_axis(payload)
         if route == "/api/filter":
             try:
                 if "filters" in payload:

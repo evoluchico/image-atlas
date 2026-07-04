@@ -81,6 +81,17 @@ class TextSearcher:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self._model_name)
 
+    def ensure_matrix(self) -> np.ndarray:
+        """Load and return the (N, dim) image embedding matrix (no model)."""
+        if self._emb is None:
+            self._emb = np.load(self._emb_path).astype(np.float32)
+        return self._emb
+
+    def encode_texts(self, texts: list[str]) -> np.ndarray:
+        """Encode text(s) into the shared CLIP space, L2-normalized."""
+        self._ensure()
+        return self._model.encode(texts, normalize_embeddings=True).astype(np.float32)
+
     def rank(self, query: str) -> np.ndarray:
         """Return image ids sorted by descending similarity to the query text."""
         self._ensure()

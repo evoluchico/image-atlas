@@ -128,6 +128,26 @@
   panning back is free. Encoding a strip takes about a millisecond.
 </p>
 
+<h2>Semantic axes</h2>
+<p>
+  If a bundle carries CLIP image embeddings (the same vectors that power text
+  search), you can define an <em>axis</em> — a direction in embedding space —
+  and read where every image sits along it. Each end is a unit vector: the
+  encoding of a phrase, or the mean of a group of images you pick or lasso
+  (groups may be scattered across the map, since an end is just a union of
+  ids). The axis direction is their difference, and scoring all N images is a
+  single matrix–vector product — a few milliseconds at 400k, with
+  <em>no re-embedding</em>.
+</p>
+<p>
+  One axis tints the map by score and fills a spectrum strip of the A↔B range.
+  Two axes become a quadrant plot: the new <code>(x, y)</code> scores are run
+  through the very same in-memory quadtree tiler the build uses, then served
+  through the unchanged viewport — so aggregation, sprite strips and the
+  zoom animation all work in axis space for free. The projected coordinates
+  export straight to CSV.
+</p>
+
 <h2>Deliberately simple choices</h2>
 <table>
   <tr><th>decision</th><th>instead of</th><th>because</th></tr>
