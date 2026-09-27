@@ -1,0 +1,9 @@
+Without writing a message to the other participants, report your
+current position on the following questions. Answer each on a scale
+from {scale_min} to {scale_max}.
+
+{dimension_list}
+
+Return only JSON.
+
+{json_template}

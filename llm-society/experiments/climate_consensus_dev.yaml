@@ -1,0 +1,103 @@
+# Development config: the full 3x3 design (+ no-interaction control) on the
+# deterministic mock LLM. No API calls. Use it to exercise the pipeline.
+
+experiment:
+  name: climate_consensus_dev
+  description: Development run of the 3x3 design with the deterministic mock LLM.
+  output_dir: data/experiments
+topic:
+  id: climate_change
+  title: climate change
+  opening_question: 'What should societies do about climate change, and how urgently should they act?
+
+    '
+stance_dimensions:
+  climate_risk_concern:
+    label: How serious a risk climate change poses
+    description: How serious a risk do you think climate change poses?
+    low_anchor: a minor concern among many
+    high_anchor: one of the most serious risks we face
+    loading: 1.0
+  policy_urgency:
+    label: How urgently societies should act
+    description: How urgently should societies act on climate change?
+    low_anchor: there is time to wait and see
+    high_anchor: act immediately at full scale
+    loading: 0.9
+  government_intervention:
+    label: The role of government
+    description: How large a role should government regulation and spending play in the response?
+    low_anchor: leave it mainly to markets and individuals
+    high_anchor: strong government regulation and investment
+    loading: 0.7
+  economic_cost_acceptance:
+    label: Willingness to accept economic costs
+    description: How much economic cost should societies accept to address climate change?
+    low_anchor: avoid measures that raise costs
+    high_anchor: accept substantial costs
+    loading: 0.8
+  mitigation_vs_adaptation:
+    label: Mitigation versus adaptation
+    description: Should the priority be adapting to climate change or cutting emissions to limit it?
+    low_anchor: prioritise adaptation
+    high_anchor: prioritise mitigation
+    loading: 0.6
+population_sizes:
+- 10
+- 50
+- 100
+environments:
+- forum
+- open_dyadic
+- erdos_renyi
+replicates: 3
+rounds: 5
+seed: 12345
+network:
+  type: erdos_renyi
+  target_mean_degree: 6
+  require_connected: true
+  recipient_selection: uniform_random_neighbor
+forum:
+  scheduler: synchronous
+dyadic:
+  recipient_selection: uniform_random
+exposure_matching:
+  enabled: false
+initialisation:
+  method: stratified
+  noise_sd: 0.1
+population:
+  model_assignment: homogeneous
+model:
+  provider: mock
+  model: mock-deterministic-v1
+generation:
+  temperature: 0.7
+  max_output_tokens: 200
+  message_word_limit: 120
+measurement:
+  probe_frequency: every_round
+  temperature: 0
+  max_output_tokens: 200
+  repair_malformed: true
+memory:
+  strategy: token_budget
+  max_context_tokens: 12000
+  reserve_own_messages: 2
+analysis:
+  stance_convergence: true
+  lexical_convergence: true
+  semantic_convergence: true
+  topic_convergence: true
+  network_metrics: true
+  lexical_top_k:
+  - 20
+  - 50
+  - 100
+controls:
+  no_interaction: true
+stopping:
+  type: fixed_rounds
+runtime:
+  max_concurrency: 64

@@ -1,0 +1,9 @@
+Discussion question: {opening_question}
+
+Other participants know you as {self_name}.
+
+You communicate through private one-to-one messages. Only the recipient of a message can read it.
+
+Your private message history (oldest first):
+
+{history}

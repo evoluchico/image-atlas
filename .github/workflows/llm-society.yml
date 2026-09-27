@@ -1,0 +1,33 @@
+name: llm-society
+
+on:
+  push:
+    branches: [master]
+    paths: ["llm-society/**", ".github/workflows/llm-society.yml"]
+  pull_request:
+    paths: ["llm-society/**", ".github/workflows/llm-society.yml"]
+
+jobs:
+  test:
+    name: py${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: llm-society
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e ".[dev,anthropic,stats]"
+      - name: Unit + integration tests (mock LLM, no network)
+        run: python -m pytest -q
+      - name: CLI smoke test
+        run: |
+          llm-society validate experiments/climate_consensus_v1.yaml
+          llm-society estimate-cost experiments/climate_consensus_v1.yaml

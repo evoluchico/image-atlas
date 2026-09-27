@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-society"
+version = "0.1.0"
+description = "Configurable simulations of consensus, polarisation and linguistic convergence in populations of interacting LLM agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Chico Camargo", email = "chico.camargo@gmail.com" }]
+dependencies = [
+    "pydantic>=2",
+    "PyYAML",
+    "numpy",
+    "scipy",
+    "pandas",
+    "pyarrow",
+    "networkx",
+    "scikit-learn",
+    "matplotlib",
+    "typer",
+    "httpx",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic"]
+embeddings = ["sentence-transformers"]
+stats = ["statsmodels"]
+dev = ["pytest"]
+
+[project.scripts]
+llm-society = "llm_society.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["llm_society*"]
+
+[tool.setuptools.package-data]
+llm_society = ["prompts/templates/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

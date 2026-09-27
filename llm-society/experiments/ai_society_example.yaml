@@ -1,0 +1,51 @@
+# Example of substituting another topic purely through configuration.
+# Stance dimensions are topic-specific; the engine is unchanged.
+
+experiment:
+  name: ai_society_v1
+  description: Same design as climate_consensus_v1, different topic.
+
+topic:
+  id: artificial_intelligence
+  title: artificial intelligence
+  opening_question: >
+    What role should artificial intelligence play in society?
+
+stance_dimensions:
+  ai_risk_concern:
+    label: How serious the risks from AI are
+    description: How serious are the risks posed by artificial intelligence?
+    low_anchor: mostly overblown
+    high_anchor: among the most serious risks we face
+    loading: 1.0
+  regulation:
+    label: How strongly AI should be regulated
+    description: How strongly should governments regulate AI development and deployment?
+    low_anchor: minimal regulation
+    high_anchor: strict regulation
+    loading: 0.8
+  pace:
+    label: How fast AI adoption should proceed
+    description: Should societies slow down or speed up the adoption of AI?
+    low_anchor: adopt as fast as possible
+    high_anchor: slow down substantially
+    loading: 0.7
+  labour_protection:
+    label: Protecting workers from automation
+    description: How much should policy prioritise protecting workers affected by AI automation?
+    low_anchor: let the labour market adjust
+    high_anchor: strong protections and support
+    loading: 0.6
+
+population_sizes: [10, 50, 100]
+environments: [forum, open_dyadic, erdos_renyi]
+replicates: 5
+rounds: 12
+seed: 777
+
+network:
+  target_mean_degree: 6
+
+model:
+  provider: mock
+  model: mock-deterministic-v1

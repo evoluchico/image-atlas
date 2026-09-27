@@ -1,0 +1,7 @@
+Discussion question: {opening_question}
+
+Other participants know you as {self_name}.
+
+Your previous contributions to the discussion (oldest first):
+
+{history}
